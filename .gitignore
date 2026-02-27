@@ -1,0 +1,8 @@
+node_modules
+dist
+.vscode
+.idea
+.env.local
+.playwright
+playwright-report
+test-results

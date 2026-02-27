@@ -1,0 +1,10 @@
+﻿name = "nodehub-modern"
+compatibility_date = "2026-02-27"
+
+[vars]
+# ADMIN_KEY = "replace-me"
+
+# [[kv_namespaces]]
+# binding = "NODEHUB_KV"
+# id = "<prod-kv-id>"
+# preview_id = "<preview-kv-id>"
