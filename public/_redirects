@@ -1,3 +1,4 @@
+/assets/*  /assets/:splat  200
 /api/*     /api/:splat     200
 /agent/*   /agent/:splat   200
 /sub/*     /sub/:splat     200
