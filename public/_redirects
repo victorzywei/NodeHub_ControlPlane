@@ -1,4 +1,4 @@
-﻿/api/*     /api/:splat     200
+/api/*     /api/:splat     200
 /agent/*   /agent/:splat   200
 /sub/*     /sub/:splat     200
-/*         /index.html     200
+/*         /               200
