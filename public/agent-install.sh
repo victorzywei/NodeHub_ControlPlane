@@ -770,9 +770,23 @@ issue_certs() {
   # install acme.sh
   if [[ ! -x "$ACME_SH_EXEC" ]]; then
     log "Installing acme.sh..."
+    local installer_url="https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh"
     local installer
-    installer="$(wrap_url "https://get.acme.sh")"
-    curl -fsSL "$installer" | sh -s email="admin@${MAIN_DOMAIN}" || die "acme.sh install failed"
+    installer="$(wrap_url "$installer_url")"
+    
+    cleanup_dir="$(mktempdir)"
+    local acme_installer="${cleanup_dir}/acme.sh"
+    
+    curl -fsSL "$installer" -o "$acme_installer" || die "Failed to download acme.sh installer"
+    chmod +x "$acme_installer"
+    
+    # Run installer
+    "$acme_installer" --install \
+      --home "$ACME_SH_DIR" \
+      --config-home "${ACME_SH_DIR}/data" \
+      --cert-home "${ACME_SH_DIR}/certs" \
+      --accountemail "admin@${MAIN_DOMAIN}" \
+      --nocron || die "acme.sh install failed"
   fi
   [[ -x "$ACME_SH_EXEC" ]] || die "acme.sh not found after installation"
 
