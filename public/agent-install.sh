@@ -770,23 +770,31 @@ issue_certs() {
   # install acme.sh
   if [[ ! -x "$ACME_SH_EXEC" ]]; then
     log "Installing acme.sh..."
-    local installer_url="https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh"
-    local installer
-    installer="$(wrap_url "$installer_url")"
     
     cleanup_dir="$(mktempdir)"
-    local acme_installer="${cleanup_dir}/acme.sh"
+    local acme_repo_url="https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz"
+    local acme_tarball="${cleanup_dir}/acme.sh.tar.gz"
+    local repo_url
+    repo_url="$(wrap_url "$acme_repo_url")"
     
-    curl -fsSL "$installer" -o "$acme_installer" || die "Failed to download acme.sh installer"
-    chmod +x "$acme_installer"
+    # Download and extract
+    curl -fsSL "$repo_url" -o "$acme_tarball" || die "Failed to download acme.sh"
+    tar -xzf "$acme_tarball" -C "$cleanup_dir" || die "Failed to extract acme.sh"
     
-    # Run installer
-    "$acme_installer" --install \
+    # Find extracted directory
+    local acme_src
+    acme_src="$(find "$cleanup_dir" -maxdepth 1 -type d -name 'acme.sh-*' | head -n 1)"
+    [[ -d "$acme_src" ]] || die "acme.sh source directory not found"
+    
+    # Run installer from source directory
+    cd "$acme_src" || die "Failed to enter acme.sh directory"
+    ./acme.sh --install \
       --home "$ACME_SH_DIR" \
       --config-home "${ACME_SH_DIR}/data" \
       --cert-home "${ACME_SH_DIR}/certs" \
       --accountemail "admin@${MAIN_DOMAIN}" \
       --nocron || die "acme.sh install failed"
+    cd - >/dev/null || true
   fi
   [[ -x "$ACME_SH_EXEC" ]] || die "acme.sh not found after installation"
 
