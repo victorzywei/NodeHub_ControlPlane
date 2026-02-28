@@ -386,9 +386,9 @@ reconcile_loop() {
 watchdog_check() {
   start_service() {
     local sname="$1"
-    if ! kill -0 "$(cat "$STATE_DIR/${sname}.pid" 2>/dev/null)" 2>/dev/null; then
-       nohup bash "$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
-       echo $! > "$STATE_DIR/${sname}.pid"
+    if ! kill -0 "$(cat "$STATE_DIR/\${sname}.pid" 2>/dev/null)" 2>/dev/null; then
+       nohup bash "$0" "$sname" > "$STATE_DIR/\${sname}.log" 2>&1 &
+       echo $! > "$STATE_DIR/\${sname}.pid"
     fi
   }
   start_service "heartbeat"
