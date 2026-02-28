@@ -26,16 +26,84 @@ const selectedNodes = ref<Set<string>>(new Set())
 const selectedTemplates = ref<Set<string>>(new Set())
 const paramsJson = ref('{}')
 
+function hasReleaseVersion(node: NodeRecord): boolean {
+  return Number(node.desired_version || 0) > 0 || Number(node.applied_version || 0) > 0
+}
+
+function summarizeParams(params: Record<string, unknown>): string {
+  const entries = Object.entries(params || {})
+  if (entries.length === 0) return ''
+  return entries
+    .slice(0, 3)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(', ')
+}
+
+function configSummary(templateNames: string[], params: Record<string, unknown>, fallback = ''): string {
+  const names = templateNames.map((item) => String(item || '').trim()).filter(Boolean)
+  const templateText = names.length > 0 ? names.join('、') : ''
+  const paramsText = summarizeParams(params)
+  if (templateText && paramsText) return `${templateText} | ${paramsText}`
+  if (templateText) return templateText
+  return fallback || '-'
+}
+
+function nodeConfigSummary(node: NodeRecord): string {
+  const templateNames = Array.isArray(node.desired_config?.template_names) ? node.desired_config!.template_names : []
+  const params =
+    node.desired_config?.params && typeof node.desired_config.params === 'object' && !Array.isArray(node.desired_config.params)
+      ? node.desired_config.params
+      : {}
+
+  return configSummary(
+    templateNames,
+    params,
+    String(node.desired_config_summary || node.applied_config_summary || ''),
+  )
+}
+
+function nodeLogSummary(node: NodeRecord): string {
+  const releaseMessage = String(node.last_release_message || '').trim()
+  const heartbeatError = String(node.last_heartbeat_error || '').trim()
+
+  if (node.last_release_status === 'failed') return releaseMessage || heartbeatError || '部署失败'
+  if (heartbeatError) return `心跳异常: ${heartbeatError}`
+  if (releaseMessage) return releaseMessage
+  if (node.last_release_status === 'ok') return '部署成功'
+  if (node.last_release_status === 'pending') return '部署中'
+  return '-'
+}
+
+function operationConfigSummary(operation: ReleaseRecord): string {
+  return configSummary(
+    operation.template_names || [],
+    operation.params || {},
+    String(operation.summary || ''),
+  )
+}
+
+function operationResultSummary(operation: ReleaseRecord): string {
+  const success = operation.results.filter((item) => item.status === 'queued').length
+  const failed = operation.results.filter((item) => item.status === 'failed').length
+  return `成功 ${success} / 失败 ${failed}`
+}
+
+const releaseNodes = computed(() => nodes.value.filter(hasReleaseVersion))
+
 const filteredNodes = computed(() => {
   const text = keyword.value.trim().toLowerCase()
-  if (!text) return nodes.value
+  if (!text) return releaseNodes.value
 
-  return nodes.value.filter((node) => {
+  return releaseNodes.value.filter((node) => {
+    const configText = nodeConfigSummary(node).toLowerCase()
+    const logText = nodeLogSummary(node).toLowerCase()
+
     return (
       node.name.toLowerCase().includes(text) ||
       node.id.toLowerCase().includes(text) ||
-      node.desired_config_summary.toLowerCase().includes(text) ||
-      node.applied_config_summary.toLowerCase().includes(text)
+      node.node_type.toLowerCase().includes(text) ||
+      configText.includes(text) ||
+      logText.includes(text)
     )
   })
 })
@@ -118,11 +186,10 @@ async function applyToNodes(): Promise<void> {
       params,
     })
 
-    const queued = operation.results.filter((item) => item.status === 'queued').length
+    const success = operation.results.filter((item) => item.status === 'queued').length
     const total = operation.results.length
-    const tone = queued === total ? 'success' : 'warning'
+    toastStore.push(`已下发配置 ${success}/${total}`, success === total ? 'success' : 'warning')
 
-    toastStore.push(`已下发配置 ${queued}/${total}`, tone)
     drawerOpen.value = false
     await loadData()
   } catch {
@@ -145,10 +212,12 @@ onMounted(loadData)
     <thead>
       <tr>
         <th>节点名称</th>
+        <th>类型</th>
         <th>版本</th>
         <th>配置</th>
         <th>状态</th>
         <th>最后上报</th>
+        <th>日记</th>
       </tr>
     </thead>
     <tbody>
@@ -157,17 +226,19 @@ onMounted(loadData)
           <div style="font-weight: 700">{{ node.name }}</div>
           <div class="muted" style="font-size: 12px">{{ node.id }}</div>
         </td>
+        <td>{{ node.node_type }}</td>
         <td>r{{ node.applied_version }} -> r{{ node.desired_version }}</td>
-        <td>{{ node.desired_config_summary || node.applied_config_summary || '-' }}</td>
+        <td>{{ nodeConfigSummary(node) }}</td>
         <td>
           <span class="badge" :class="node.last_release_status === 'failed' ? 'danger' : node.last_release_status === 'ok' ? 'success' : 'warning'">
             {{ node.last_release_status }}
           </span>
         </td>
         <td>{{ formatRelative(node.heartbeat_reported_at || node.last_seen_at) }}</td>
+        <td class="muted">{{ nodeLogSummary(node) }}</td>
       </tr>
       <tr v-if="!loading && filteredNodes.length === 0">
-        <td colspan="5" class="muted">暂无节点</td>
+        <td colspan="7" class="muted">暂无已下发版本的节点</td>
       </tr>
     </tbody>
   </DataGrid>
@@ -176,21 +247,20 @@ onMounted(loadData)
     <thead>
       <tr>
         <th>时间</th>
+        <th>节点数</th>
         <th>配置摘要</th>
-        <th>节点结果</th>
+        <th>发布结果</th>
       </tr>
     </thead>
     <tbody>
       <tr v-for="operation in operations" :key="operation.id">
         <td>{{ formatDateTime(operation.created_at) }}</td>
-        <td>{{ operation.summary || operation.template_names.join(' + ') || '-' }}</td>
-        <td>
-          成功 {{ operation.results.filter((item) => item.status === 'queued').length }} /
-          失败 {{ operation.results.filter((item) => item.status === 'failed').length }}
-        </td>
+        <td>{{ operation.node_ids.length }}</td>
+        <td>{{ operationConfigSummary(operation) }}</td>
+        <td>{{ operationResultSummary(operation) }}</td>
       </tr>
       <tr v-if="!loading && operations.length === 0">
-        <td colspan="3" class="muted">暂无操作记录</td>
+        <td colspan="4" class="muted">暂无操作记录</td>
       </tr>
     </tbody>
   </DataGrid>

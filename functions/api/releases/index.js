@@ -26,7 +26,7 @@ function summarizeParams(params) {
 }
 
 function summarizeConfig(templateNames, params) {
-  const templateText = templateNames.length > 0 ? templateNames.join(' + ') : 'no-template'
+  const templateText = templateNames.length > 0 ? templateNames.join('、') : 'no-template'
   const paramsText = summarizeParams(params)
   return paramsText ? `${templateText} | ${paramsText}` : templateText
 }
