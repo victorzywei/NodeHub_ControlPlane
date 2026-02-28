@@ -585,11 +585,11 @@ watchdog_check() {
 
 case "$MODE" in
   heartbeat)
-    echo $$ > "$STATE_DIR/heartbeat.pid"
+    echo \$\$ > "$STATE_DIR/heartbeat.pid"
     heartbeat_loop
     ;;
   reconcile)
-    echo $$ > "$STATE_DIR/reconcile.pid"
+    echo \$\$ > "$STATE_DIR/reconcile.pid"
     reconcile_loop
     ;;
   cron_check)
