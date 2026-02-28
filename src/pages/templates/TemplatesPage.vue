@@ -289,6 +289,7 @@ onMounted(loadData)
         <th>协议</th>
         <th>传输</th>
         <th>TLS</th>
+        <th>网络</th>
         <th>说明</th>
         <th>操作</th>
       </tr>
@@ -299,11 +300,15 @@ onMounted(loadData)
         <td>{{ item.protocol }}</td>
         <td>{{ item.transport }}</td>
         <td>{{ item.tls_mode }}</td>
+        <td>
+          <span v-if="['ws', 'grpc'].includes(item.transport)" class="badge success">支持 CDN</span>
+          <span v-else class="badge warning">仅直连</span>
+        </td>
         <td class="muted">{{ item.description || '-' }}</td>
         <td><button class="btn btn-secondary" @click="openEdit(item)">编辑参数</button></td>
       </tr>
       <tr v-if="!loading && builtinRows.length === 0">
-        <td colspan="6" class="muted">暂无内置模板</td>
+        <td colspan="7" class="muted">暂无内置模板</td>
       </tr>
     </tbody>
   </DataGrid>
@@ -315,6 +320,7 @@ onMounted(loadData)
         <th>协议</th>
         <th>传输</th>
         <th>TLS</th>
+        <th>网络</th>
         <th>兼容节点</th>
         <th>操作</th>
       </tr>
@@ -325,11 +331,15 @@ onMounted(loadData)
         <td>{{ item.protocol }}</td>
         <td>{{ item.transport }}</td>
         <td>{{ item.tls_mode }}</td>
+        <td>
+          <span v-if="['ws', 'grpc'].includes(item.transport)" class="badge success">支持 CDN</span>
+          <span v-else class="badge warning">仅直连</span>
+        </td>
         <td>{{ item.node_types.join(', ') || '-' }}</td>
         <td><button class="btn btn-secondary" @click="openEdit(item)">编辑</button></td>
       </tr>
       <tr v-if="!loading && customRows.length === 0">
-        <td colspan="6" class="muted">暂无自定义模板</td>
+        <td colspan="7" class="muted">暂无自定义模板</td>
       </tr>
     </tbody>
   </DataGrid>
