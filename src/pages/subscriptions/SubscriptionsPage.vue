@@ -4,7 +4,8 @@ import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { listNodes } from '@/api/services/nodes'
 import { createSubscription, deleteSubscription, listSubscriptions, updateSubscription } from '@/api/services/subscriptions'
-import type { NodeRecord, SubscriptionRecord } from '@/types/domain'
+import { getSystemStatus } from '@/api/services/system'
+import type { NodeRecord, SubscriptionRecord, SystemStatus } from '@/types/domain'
 import { formatDateTime } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
@@ -12,6 +13,7 @@ const toastStore = useToastStore()
 
 const subscriptions = ref<SubscriptionRecord[]>([])
 const nodes = ref<NodeRecord[]>([])
+const configuredBaseUrl = ref('')
 const editorOpen = ref(false)
 const editingToken = ref('')
 const deletingToken = ref('')
@@ -23,7 +25,6 @@ const form = reactive({
   visible: new Set<string>(),
 })
 
-const baseUrl = computed(() => window.location.origin)
 const editing = computed(() => Boolean(editingToken.value))
 const nodeNameMap = computed(() => new Map(nodes.value.map((node) => [node.id, node.name])))
 
@@ -33,8 +34,22 @@ const linkFormats = [
   { key: 'singbox', label: 'singbox' },
 ] as const
 
+function normalizeBaseUrl(raw: string): string {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+
+  try {
+    const parsed = new URL(text)
+    return parsed.origin
+  } catch {
+    return ''
+  }
+}
+
+const effectiveBaseUrl = computed(() => normalizeBaseUrl(configuredBaseUrl.value) || window.location.origin)
+
 function subLink(token: string, format?: string): string {
-  const root = `${baseUrl.value}/sub/${token}`
+  const root = `${effectiveBaseUrl.value}/sub/${token}`
   return format ? `${root}?format=${format}` : root
 }
 
@@ -82,12 +97,23 @@ async function copy(text: string): Promise<void> {
 }
 
 async function loadData(): Promise<void> {
-  try {
-    const [subRows, nodeRows] = await Promise.all([listSubscriptions(), listNodes()])
-    subscriptions.value = subRows
-    nodes.value = nodeRows
-  } catch {
-    toastStore.push('订阅数据加载失败', 'danger')
+  const [subRows, nodeRows, status] = await Promise.allSettled([
+    listSubscriptions(),
+    listNodes(),
+    getSystemStatus(),
+  ])
+
+  if (subRows.status === 'fulfilled') subscriptions.value = subRows.value
+  else toastStore.push('订阅数据加载失败', 'danger')
+
+  if (nodeRows.status === 'fulfilled') nodes.value = nodeRows.value
+  else toastStore.push('节点数据加载失败', 'danger')
+
+  if (status.status === 'fulfilled') {
+    const system = status.value as SystemStatus
+    configuredBaseUrl.value = system.subscription_base_url || ''
+  } else {
+    configuredBaseUrl.value = ''
   }
 }
 
@@ -182,7 +208,9 @@ onMounted(loadData)
       </section>
     </article>
 
-    <section v-if="subscriptions.length === 0" class="panel panel-pad muted">暂无订阅，点击右上角创建订阅。</section>
+    <section v-if="subscriptions.length === 0" class="panel panel-pad muted">
+      暂无订阅，点击右上角创建订阅。
+    </section>
   </section>
 
   <DetailDrawer v-model="editorOpen" :title="editing ? '编辑订阅' : '创建订阅'">
@@ -243,14 +271,14 @@ onMounted(loadData)
 }
 
 .sub-card {
-  border: 1px solid #1f3252;
+  border: 1px solid var(--border-soft);
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(18, 31, 54, 0.94), rgba(14, 24, 43, 0.98)),
-    radial-gradient(circle at 90% 0%, rgba(36, 123, 255, 0.2), transparent 50%);
-  color: #cce1ff;
+    radial-gradient(circle at 95% 0%, rgba(14, 126, 111, 0.12), transparent 42%),
+    linear-gradient(180deg, #ffffff, #f9fbf4);
+  color: var(--text-primary);
   padding: 16px;
-  box-shadow: 0 16px 30px rgba(5, 12, 24, 0.36);
+  box-shadow: var(--shadow-soft);
 }
 
 .sub-card-head {
@@ -283,11 +311,11 @@ onMounted(loadData)
 }
 
 .sub-dot.online {
-  background: #1fdb9f;
+  background: var(--success);
 }
 
 .sub-dot.offline {
-  background: #f59e0b;
+  background: var(--warning);
 }
 
 .sub-status {
@@ -296,15 +324,15 @@ onMounted(loadData)
 }
 
 .sub-status.enabled {
-  color: #1fdb9f;
+  color: var(--success);
 }
 
 .sub-status.disabled {
-  color: #f59e0b;
+  color: var(--warning);
 }
 
 .sub-meta-line {
-  color: rgba(191, 211, 242, 0.72);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
@@ -314,21 +342,6 @@ onMounted(loadData)
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: flex-end;
-}
-
-.sub-card .btn-secondary {
-  border-color: rgba(106, 165, 242, 0.4);
-  background: rgba(16, 41, 77, 0.78);
-  color: #87c8ff;
-}
-
-.sub-card .btn-secondary:hover {
-  background: rgba(16, 53, 98, 0.92);
-}
-
-.sub-card .btn-danger {
-  background: rgba(139, 39, 58, 0.72);
-  border: 1px solid rgba(240, 111, 130, 0.45);
 }
 
 .sub-links {
@@ -342,14 +355,14 @@ onMounted(loadData)
   grid-template-columns: 64px 1fr auto;
   gap: 10px;
   align-items: center;
-  border: 1px solid rgba(92, 125, 176, 0.34);
+  border: 1px solid var(--border-soft);
   border-radius: 10px;
   padding: 8px 10px;
-  background: rgba(4, 16, 35, 0.72);
+  background: var(--bg-panel-alt);
 }
 
 .sub-link-label {
-  color: rgba(160, 185, 224, 0.74);
+  color: var(--text-secondary);
   font-size: 14px;
   text-transform: lowercase;
 }
@@ -357,7 +370,7 @@ onMounted(loadData)
 .sub-link-text {
   overflow: auto;
   white-space: nowrap;
-  color: #17d1ff;
+  color: var(--brand-strong);
   font-family: 'IBM Plex Mono', monospace;
   font-size: 14px;
 }

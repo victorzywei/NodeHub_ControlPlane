@@ -54,11 +54,13 @@ set PLAYWRIGHT_ADMIN_KEY=your-admin-key
 npm run e2e
 ```
 
+
 ## Cloudflare Pages
 
 - 构建输出目录：`dist`
 - Functions 目录：`functions`
 - 必需环境变量：`ADMIN_KEY`
+- 可选环境变量：`SUBSCRIPTION_BASE_URL`（用于订阅链接固定域名，例如 `https://sub.example.com`）
 - 必需 KV 绑定：`NODEHUB_KV`
 - 路由策略：`public/_redirects` 已配置 `/api/*`、`/agent/*`、`/sub/*` 与 SPA fallback
 - 生产部署手册：见 `DEPLOYMENT.md`

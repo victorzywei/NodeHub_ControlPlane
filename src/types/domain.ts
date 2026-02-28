@@ -105,6 +105,7 @@ export interface SystemStatus {
   app_version: string
   kv_available: boolean
   kv_namespace: string
+  subscription_base_url: string
   uptime_hint: string
   now: string
 }
