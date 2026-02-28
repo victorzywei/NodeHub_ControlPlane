@@ -5,6 +5,9 @@ API_BASE=""
 NODE_ID=""
 NODE_TOKEN=""
 TLS_DOMAIN=""
+TLS_DOMAIN_ALT=""
+GITHUB_MIRROR=""
+CF_API_TOKEN=""
 HEARTBEAT_INTERVAL=600
 RECONCILE_INTERVAL=15
 STATE_DIR="/var/lib/nodehub-agent"
@@ -17,6 +20,9 @@ while [[ $# -gt 0 ]]; do
     --node-id) NODE_ID="$2"; shift 2 ;;
     --node-token) NODE_TOKEN="$2"; shift 2 ;;
     --tls-domain) TLS_DOMAIN="$2"; shift 2 ;;
+    --tls-domain-alt) TLS_DOMAIN_ALT="$2"; shift 2 ;;
+    --github-mirror) GITHUB_MIRROR="$2"; shift 2 ;;
+    --cf-api-token) CF_API_TOKEN="$2"; shift 2 ;;
     --heartbeat-interval) HEARTBEAT_INTERVAL="$2"; shift 2 ;;
     --reconcile-interval) RECONCILE_INTERVAL="$2"; shift 2 ;;
     --state-dir) STATE_DIR="$2"; shift 2 ;;
@@ -49,6 +55,9 @@ API_BASE="$API_BASE"
 NODE_ID="$NODE_ID"
 NODE_TOKEN="$NODE_TOKEN"
 TLS_DOMAIN="$TLS_DOMAIN"
+TLS_DOMAIN_ALT="$TLS_DOMAIN_ALT"
+GITHUB_MIRROR="$GITHUB_MIRROR"
+CF_API_TOKEN="$CF_API_TOKEN"
 HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
 RECONCILE_INTERVAL="$RECONCILE_INTERVAL"
 STATE_DIR="$STATE_DIR"
@@ -486,6 +495,62 @@ else
   bash "$AGENT_ROOT/agent-runner.sh" cron_check
   echo "Agent services started via background watchdog."
   echo "Check logs in $STATE_DIR/heartbeat.log and $STATE_DIR/reconcile.log"
+fi
+
+if [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]]; then
+  echo "Applying for SSL certificates..."
+  ACME_SH_DIR="/root/.acme.sh"
+  ACME_SH_EXEC="$ACME_SH_DIR/acme.sh"
+
+  if command -v socat >/dev/null 2>&1; then :; else
+    if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y socat >/dev/null; fi
+    if command -v dnf >/dev/null 2>&1; then dnf install -y socat >/dev/null; fi
+    if command -v yum >/dev/null 2>&1; then yum install -y socat >/dev/null; fi
+  fi
+
+  if [[ -n "$TLS_DOMAIN" ]]; then
+    MAIN_DOMAIN="$TLS_DOMAIN"
+  else
+    MAIN_DOMAIN="$TLS_DOMAIN_ALT"
+  fi
+
+  if [[ ! -x "$ACME_SH_EXEC" ]]; then
+    echo "Installing acme.sh..."
+    if [[ -n "$GITHUB_MIRROR" ]]; then
+      MIRROR="\${GITHUB_MIRROR%/}"
+      curl -fsSL "$MIRROR/https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" | sh -s email=admin@$MAIN_DOMAIN
+    else
+      curl -fsSL https://get.acme.sh | sh -s email=admin@$MAIN_DOMAIN
+    fi
+  fi
+
+  if [[ -x "$ACME_SH_EXEC" ]]; then
+    $ACME_SH_EXEC --upgrade --auto-upgrade
+    $ACME_SH_EXEC --set-default-ca --server letsencrypt
+
+    DOMAINS_ARGS=""
+    if [[ -n "$TLS_DOMAIN" ]]; then DOMAINS_ARGS="$DOMAINS_ARGS -d $TLS_DOMAIN"; fi
+    if [[ -n "$TLS_DOMAIN_ALT" ]]; then DOMAINS_ARGS="$DOMAINS_ARGS -d $TLS_DOMAIN_ALT"; fi
+
+    mkdir -p "$CONFIG_ROOT/cert"
+    CERT_DIR="$CONFIG_ROOT/cert"
+
+    if [[ -n "$CF_API_TOKEN" ]]; then
+      echo "Using CF DNS API for validation..."
+      export CF_Token="$CF_API_TOKEN"
+      $ACME_SH_EXEC --issue $DOMAINS_ARGS --dns dns_cf --keylength ec-256
+    else
+      echo "Using Standalone mode for validation..."
+      $ACME_SH_EXEC --issue $DOMAINS_ARGS --standalone --keylength ec-256
+    fi
+
+    $ACME_SH_EXEC --install-cert -d "$MAIN_DOMAIN" --ecc \
+      --key-file "$CERT_DIR/server.key" \
+      --fullchain-file "$CERT_DIR/server.crt"
+    echo "SSL Certificate installed to $CERT_DIR"
+  else
+    echo "acme.sh installation failed!"
+  fi
 fi
 `
 

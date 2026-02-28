@@ -18,15 +18,27 @@ export async function onRequestGet({ request, env, params }) {
   }
 
   const origin = new URL(request.url).origin
-  const command = [
+  const commandParts = [
     `URL=${quoteShell(`${origin}/agent/install`)}; `,
     `if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s --`,
     ` --api-base ${quoteShell(origin)}`,
     ` --node-id ${quoteShell(node.id)}`,
     ` --node-token ${quoteShell(node.token)}`,
-    ` --tls-domain ${quoteShell(node.entry_cdn || '')}`,
     ` --heartbeat-interval ${quoteShell('600')}`,
-  ].join('')
+  ]
 
-  return ok({ command })
+  if (node.entry_cdn) {
+    commandParts.push(` --tls-domain ${quoteShell(node.entry_cdn)}`)
+  }
+  if (node.entry_direct) {
+    commandParts.push(` --tls-domain-alt ${quoteShell(node.entry_direct)}`)
+  }
+  if (node.github_mirror) {
+    commandParts.push(` --github-mirror ${quoteShell(node.github_mirror)}`)
+  }
+  if (node.cf_api_token) {
+    commandParts.push(` --cf-api-token ${quoteShell(node.cf_api_token)}`)
+  }
+
+  return ok({ command: commandParts.join('') })
 }
