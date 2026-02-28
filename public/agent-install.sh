@@ -275,9 +275,25 @@ install_xray() {
 get_latest_github_tag() {
   # $1=owner/repo
   local repo="$1"
-  local api
+  local api tag
   api="$(wrap_url "https://api.github.com/repos/${repo}/releases/latest")"
-  curl -fsSL "$api" | tr -d '\r\n' | sed 's/"/\n"/g' | awk -F: '/"tag_name"/{gsub(/[", ]/,"",$2); print $2; exit}'
+  
+  # Try multiple parsing methods for robustness
+  tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  
+  # Fallback: try simpler parsing
+  if [[ -z "$tag" ]]; then
+    tag="$(curl -fsSL "$api" 2>/dev/null | tr -d '\r\n' | sed 's/.*"tag_name":"\([^"]*\)".*/\1/')"
+  fi
+  
+  # Fallback: use redirect URL method (more reliable, no API limit)
+  if [[ -z "$tag" || "$tag" == *"{"* ]]; then
+    local redirect_url
+    redirect_url="$(wrap_url "https://github.com/${repo}/releases/latest")"
+    tag="$(curl -fsSL -I "$redirect_url" 2>/dev/null | grep -i '^location:' | sed 's/.*\/tag\/\([^[:space:]]*\).*/\1/' | tr -d '\r\n')"
+  fi
+  
+  echo "$tag"
 }
 
 install_singbox() {
