@@ -10,10 +10,10 @@
  * Updated: 2026-03-01
  */
 
-export async function onRequestGet(context) {
+export async function onRequestGet({ request }) {
   try {
     // Construct URL to the static bash script
-    const origin = new URL(context.request.url).origin;
+    const origin = new URL(request.url).origin;
     const scriptUrl = `${origin}/agent-install.sh`;
     
     // Fetch the static file
