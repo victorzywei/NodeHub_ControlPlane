@@ -176,7 +176,7 @@ onMounted(loadData)
   </FilterBar>
 
   <div class="sub-stack" style="margin-top: 16px;">
-    <div v-for="sub in subscriptions" :key="sub.token" class="card">
+    <div v-for="sub in subscriptions" :key="sub.token" class="panel panel-pad">
       <div class="sub-head">
         <div style="display: flex; align-items: center; gap: 8px;">
           <div style="font-weight: 700; font-size: 16px;">{{ sub.name || '未命名订阅' }}</div>
@@ -204,7 +204,7 @@ onMounted(loadData)
       </div>
     </div>
     
-    <div v-if="subscriptions.length === 0" class="card muted" style="text-align: center; padding: 40px;">
+    <div v-if="subscriptions.length === 0" class="panel panel-pad muted" style="text-align: center; padding: 40px;">
       暂无订阅，点击右上角创建订阅。
     </div>
   </div>
