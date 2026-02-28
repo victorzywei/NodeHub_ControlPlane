@@ -45,6 +45,100 @@ fi
 mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
 chmod 700 "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
 
+echo "Installing official Xray and Sing-box binaries..."
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64)
+    XRAY_ARCH="64"
+    SINGBOX_ARCH="amd64"
+    ;;
+  aarch64|arm64)
+    XRAY_ARCH="arm64-v8a"
+    SINGBOX_ARCH="arm64"
+    ;;
+  *)
+    echo "Warning: Unsupported CPU architecture for pre-compiled binaries: $ARCH. You may need to install Xray/Sing-box manually."
+    XRAY_ARCH=""
+    ;;
+esac
+
+if [[ -n "$XRAY_ARCH" ]]; then
+  if ! command -v unzip >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+    echo "Attempting to install unzip and tar to extract binaries..."
+    if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y unzip tar >/dev/null; fi
+    if command -v dnf >/dev/null 2>&1; then dnf install -y unzip tar >/dev/null; fi
+    if command -v yum >/dev/null 2>&1; then yum install -y unzip tar >/dev/null; fi
+  fi
+  
+  if ! command -v xray >/dev/null 2>&1 && [[ ! -x /usr/local/bin/xray ]]; then
+    echo "Downloading latest Xray-core..."
+    mkdir -p /tmp/nodehub-xray
+    if curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"; then
+      unzip -q -o /tmp/xray.zip -d /tmp/nodehub-xray || true
+      if [[ -f /tmp/nodehub-xray/xray ]]; then
+        if command -v install >/dev/null 2>&1; then
+          install -m 755 /tmp/nodehub-xray/xray /usr/local/bin/xray
+          install -d -m 755 /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+          install -m 644 /tmp/nodehub-xray/geoip.dat /usr/local/share/xray/geoip.dat 2>/dev/null || true
+          install -m 644 /tmp/nodehub-xray/geosite.dat /usr/local/share/xray/geosite.dat 2>/dev/null || true
+        else
+          mkdir -p /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+          chmod 755 /usr/local/etc/xray /usr/local/share/xray /var/log/xray 2>/dev/null || true
+          mv /tmp/nodehub-xray/xray /usr/local/bin/xray
+          chmod 755 /usr/local/bin/xray
+          mv /tmp/nodehub-xray/geoip.dat /usr/local/share/xray/geoip.dat 2>/dev/null || true
+          mv /tmp/nodehub-xray/geosite.dat /usr/local/share/xray/geosite.dat 2>/dev/null || true
+          chmod 644 /usr/local/share/xray/geoip.dat /usr/local/share/xray/geosite.dat 2>/dev/null || true
+        fi
+        echo "Xray-core installed to /usr/local/bin/xray (FHS standard path)"
+      else
+        echo "Xray-core extraction failed."
+      fi
+    else
+      echo "Failed to download Xray-core, please check network or run manually."
+    fi
+    rm -rf /tmp/xray.zip /tmp/nodehub-xray
+  else
+    echo "Xray-core is already installed."
+  fi
+
+  if ! command -v sing-box >/dev/null 2>&1 && [[ ! -x /usr/local/bin/sing-box ]]; then
+    echo "Downloading latest sing-box..."
+    SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
+    SINGBOX_LATEST_TAG=$(echo "$SINGBOX_LATEST_URL" | grep -oE '[^/]+$')
+    SINGBOX_VERSION=\${SINGBOX_LATEST_TAG#v}
+    
+    if [[ -n "$SINGBOX_VERSION" && "$SINGBOX_VERSION" != "latest" ]]; then
+      SINGBOX_TAR="sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}.tar.gz"
+      SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
+      if curl -fsSL -o /tmp/sing-box.tar.gz "$SINGBOX_URL"; then
+        tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || true
+        if [[ -f "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" ]]; then
+          if command -v install >/dev/null 2>&1; then
+            install -m 755 "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" /usr/local/bin/sing-box
+            install -d -m 755 /etc/sing-box /var/lib/sing-box /var/log/sing-box
+          else
+            mkdir -p /etc/sing-box /var/lib/sing-box /var/log/sing-box
+            chmod 755 /etc/sing-box /var/lib/sing-box /var/log/sing-box 2>/dev/null || true
+            mv "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" /usr/local/bin/sing-box
+            chmod 755 /usr/local/bin/sing-box
+          fi
+          echo "sing-box installed to /usr/local/bin/sing-box (official standard path)"
+        else
+          echo "sing-box extraction failed."
+        fi
+      else
+        echo "Failed to download sing-box (URL: $SINGBOX_URL), please check network."
+      fi
+      rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}"
+    else
+      echo "Failed to detect sing-box latest version."
+    fi
+  else
+    echo "sing-box is already installed."
+  fi
+fi
+
 CONFIG_FILE="$CONFIG_ROOT/config.env"
 RUNNER_SCRIPT="$AGENT_ROOT/agent-runner.sh"
 HEARTBEAT_SERVICE="/etc/systemd/system/nodehub-heartbeat.service"
@@ -243,9 +337,9 @@ heartbeat_once() {
   local payload
   payload="$(build_heartbeat_payload)"
 
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/heartbeat" \
-    -H "X-Node-Token: $NODE_TOKEN" \
-    -H "Content-Type: application/json" \
+  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/heartbeat" \\
+    -H "X-Node-Token: $NODE_TOKEN" \\
+    -H "Content-Type: application/json" \\
     -d "$payload" >/dev/null; then
     return 0
   fi
@@ -257,13 +351,13 @@ heartbeat_once() {
 json_number_field() {
   local key="$1"
   local payload="$2"
-  echo "$payload" | tr -d '\\r\\n' | grep -o "\\\"$key\\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
+  echo "$payload" | tr -d '\\r\\n' | grep -o "\\"$key\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
 }
 
 json_bool_field() {
   local key="$1"
   local payload="$2"
-  if echo "$payload" | tr -d '\\r\\n' | grep -q "\\\"$key\\\":true"; then
+  if echo "$payload" | tr -d '\\r\\n' | grep -q "\\"$key\\":true"; then
     echo "true"
     return
   fi
@@ -290,7 +384,7 @@ enqueue_apply_event() {
   local event_id
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   event_id="$(generate_event_id)"
-  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"message":"%s","occurred_at":"%s"}\\n' \
+  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"message":"%s","occurred_at":"%s"}\\n' \\
     "$event_id" "$status" "$version" "$message" "$now" >> "$EVENTS_FILE"
 }
 
@@ -306,11 +400,11 @@ flush_pending_events() {
   fi
 
   local payload
-  payload="{\\\"node_id\\\":\\\"$NODE_ID\\\",\\\"events\\\":[$event_rows]}"
+  payload="{\\"node_id\\":\\"$NODE_ID\\",\\"events\\":[$event_rows]}"
 
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/events" \
-    -H "X-Node-Token: $NODE_TOKEN" \
-    -H "Content-Type: application/json" \
+  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/events" \\
+    -H "X-Node-Token: $NODE_TOKEN" \\
+    -H "Content-Type: application/json" \\
     -d "$payload" >/dev/null; then
     : > "$EVENTS_FILE"
     return 0
@@ -350,7 +444,7 @@ reconcile_once() {
 
   current_version="$(read_current_version)"
 
-  response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
+  response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \\
     -H "X-Node-Token: $NODE_TOKEN")" || {
     set_last_error "reconcile request failed"
     return 1
@@ -468,7 +562,7 @@ echo "state_dir=$STATE_DIR"
 echo "agent_root=$AGENT_ROOT"
 
 USE_SYSTEMD=0
-if command -v systemctl >/dev/null 2>&1 && systemctl | grep -q '\-\.mount' >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1 && systemctl | grep -q '\\-\\.mount' >/dev/null 2>&1; then
   USE_SYSTEMD=1
 elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
   USE_SYSTEMD=1
@@ -544,8 +638,8 @@ if [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]]; then
       $ACME_SH_EXEC --issue $DOMAINS_ARGS --standalone --keylength ec-256
     fi
 
-    $ACME_SH_EXEC --install-cert -d "$MAIN_DOMAIN" --ecc \
-      --key-file "$CERT_DIR/server.key" \
+    $ACME_SH_EXEC --install-cert -d "$MAIN_DOMAIN" --ecc \\
+      --key-file "$CERT_DIR/server.key" \\
       --fullchain-file "$CERT_DIR/server.crt"
     echo "SSL Certificate installed to $CERT_DIR"
   else
