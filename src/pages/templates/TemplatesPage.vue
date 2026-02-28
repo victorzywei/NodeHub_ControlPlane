@@ -267,9 +267,26 @@ async function removeTemplate(): Promise<void> {
 
 watch(
   () => [form.protocol, form.transport, form.tls_mode],
-  () => {
+  (newValues, oldValues) => {
     if (!editorOpen.value || editorMode.value !== 'create') return
-    syncDefaultsForm(buildDefaultsPayload())
+
+    const oldProto = oldValues?.[0] || ''
+    const oldTrans = oldValues?.[1] || ''
+    const oldTls = oldValues?.[2] || ''
+
+    // 记录上一组合的默认参数，切换组合时需将它们清理掉，避免残留在表单中变成自定义参数
+    const oldPresetKeys = new Set(
+      getPresetTemplateParamFields(oldProto, oldTrans, oldTls).map((f) => f.key)
+    )
+
+    const nextSource: Record<string, unknown> = {}
+    Object.keys(defaultsForm).forEach((key) => {
+      if (!oldPresetKeys.has(key)) {
+        nextSource[key] = defaultsForm[key]
+      }
+    })
+
+    syncDefaultsForm(nextSource)
   },
 )
 
