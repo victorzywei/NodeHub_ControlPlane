@@ -18,165 +18,6 @@ export interface TemplateParamField {
   custom?: boolean
 }
 
-const PRESET_FIELDS: Record<string, TemplateParamField[]> = {
-  'vless:tcp:reality': [
-    {
-      key: 'port',
-      label: 'Port',
-      type: 'number',
-      valueType: 'number',
-      defaultValue: 49443,
-    },
-    {
-      key: 'flow',
-      label: 'Flow',
-      type: 'select',
-      valueType: 'string',
-      options: [
-        { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' },
-        { value: 'none', label: 'none' },
-      ],
-      defaultValue: 'xtls-rprx-vision',
-    },
-    {
-      key: 'server_name',
-      label: 'Server Name / SNI',
-      type: 'text',
-      valueType: 'string',
-      placeholder: 'example.com',
-      defaultValue: '',
-    },
-    {
-      key: 'reality_private_key',
-      label: 'Reality Private Key',
-      type: 'password',
-      valueType: 'string',
-      secret: true,
-    },
-    {
-      key: 'reality_short_id',
-      label: 'Reality Short ID',
-      type: 'password',
-      valueType: 'string',
-      secret: true,
-    },
-  ],
-  'hysteria2:udp:tls': [
-    {
-      key: 'port',
-      label: 'Port',
-      type: 'number',
-      valueType: 'number',
-      defaultValue: 49444,
-    },
-    {
-      key: 'password',
-      label: 'Password',
-      type: 'password',
-      valueType: 'string',
-      secret: true,
-    },
-    {
-      key: 'obfs',
-      label: 'Obfs',
-      type: 'select',
-      valueType: 'string',
-      options: [
-        { value: 'none', label: 'none' },
-        { value: 'salamander', label: 'salamander' },
-      ],
-      defaultValue: 'none',
-    },
-    {
-      key: 'sni',
-      label: 'SNI',
-      type: 'text',
-      valueType: 'string',
-      placeholder: 'example.com',
-      defaultValue: '',
-    },
-  ],
-  'shadowsocks2022:tcp:none': [
-    {
-      key: 'port',
-      label: 'Port',
-      type: 'number',
-      valueType: 'number',
-      defaultValue: 49445,
-    },
-    {
-      key: 'method',
-      label: 'Method',
-      type: 'select',
-      valueType: 'string',
-      options: [
-        { value: '2022-blake3-aes-128-gcm', label: '2022-blake3-aes-128-gcm' },
-        { value: '2022-blake3-aes-256-gcm', label: '2022-blake3-aes-256-gcm' },
-        { value: '2022-blake3-chacha20-poly1305', label: '2022-blake3-chacha20-poly1305' },
-      ],
-      defaultValue: '2022-blake3-aes-128-gcm',
-    },
-    {
-      key: 'password',
-      label: 'Password',
-      type: 'password',
-      valueType: 'string',
-      secret: true,
-    },
-  ],
-  'vless:ws:tls': [
-    {
-      key: 'port',
-      label: 'Port',
-      type: 'number',
-      valueType: 'number',
-      defaultValue: 2053,
-    },
-    {
-      key: 'path',
-      label: 'WS Path',
-      type: 'text',
-      valueType: 'string',
-      defaultValue: '/ws',
-    },
-    {
-      key: 'host',
-      label: 'Host',
-      type: 'text',
-      valueType: 'string',
-      defaultValue: '',
-    },
-  ],
-  'trojan:tcp:tls': [
-    {
-      key: 'port',
-      label: 'Port',
-      type: 'number',
-      valueType: 'number',
-      defaultValue: 2087,
-    },
-    {
-      key: 'password',
-      label: 'Password',
-      type: 'password',
-      valueType: 'string',
-      secret: true,
-    },
-    {
-      key: 'sni',
-      label: 'SNI',
-      type: 'text',
-      valueType: 'string',
-      placeholder: 'example.com',
-      defaultValue: '',
-    },
-  ],
-}
-
-function profileKey(protocol: string, transport: string, tlsMode: string): string {
-  return `${protocol}:${transport}:${tlsMode}`
-}
-
 function randomHex(bytes: number): string {
   const array = new Uint8Array(bytes)
   crypto.getRandomValues(array)
@@ -191,9 +32,53 @@ export function generateSecretValue(key: string): string {
 }
 
 export function getPresetTemplateParamFields(protocol: string, transport: string, tlsMode: string): TemplateParamField[] {
-  const key = profileKey(protocol, transport, tlsMode)
-  const fields = PRESET_FIELDS[key] || []
-  return fields.map((item) => ({ ...item, options: item.options ? [...item.options] : undefined }))
+  const fields: TemplateParamField[] = []
+
+  let defaultPort = 443
+  if (protocol === 'hysteria2') defaultPort = 49444
+  else if (protocol === 'shadowsocks2022') defaultPort = 49445
+  else if (protocol === 'vless' && tlsMode === 'reality') defaultPort = 49443
+  else if (transport === 'ws') defaultPort = 2053
+  else if (protocol === 'trojan') defaultPort = 2087
+
+  fields.push({
+    key: 'port',
+    label: 'Port',
+    type: 'number',
+    valueType: 'number',
+    defaultValue: defaultPort,
+  })
+
+  if (protocol === 'hysteria2') {
+    fields.push({ key: 'password', label: 'Password', type: 'password', valueType: 'string', secret: true })
+    fields.push({ key: 'obfs', label: 'Obfs', type: 'select', valueType: 'string', options: [{ value: 'none', label: 'none' }, { value: 'salamander', label: 'salamander' }], defaultValue: 'none' })
+  } else if (protocol === 'shadowsocks2022') {
+    fields.push({ key: 'method', label: 'Method', type: 'select', valueType: 'string', options: [{ value: '2022-blake3-aes-128-gcm', label: '2022-blake3-aes-128-gcm' }, { value: '2022-blake3-aes-256-gcm', label: '2022-blake3-aes-256-gcm' }, { value: '2022-blake3-chacha20-poly1305', label: '2022-blake3-chacha20-poly1305' }], defaultValue: '2022-blake3-aes-128-gcm' })
+    fields.push({ key: 'password', label: 'Password', type: 'password', valueType: 'string', secret: true })
+  } else if (protocol === 'trojan') {
+    fields.push({ key: 'password', label: 'Password', type: 'password', valueType: 'string', secret: true })
+  }
+
+  if (transport === 'ws') {
+    fields.push({ key: 'path', label: 'WS Path', type: 'text', valueType: 'string', defaultValue: '/ws' })
+    fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '' })
+  } else if (transport === 'grpc') {
+    fields.push({ key: 'service_name', label: 'gRPC Service Name', type: 'text', valueType: 'string', defaultValue: 'grpc-service' })
+  }
+
+  if (protocol === 'vless' && transport === 'tcp' && (tlsMode === 'reality' || tlsMode === 'tls')) {
+    fields.push({ key: 'flow', label: 'Flow', type: 'select', valueType: 'string', options: [{ value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' }, { value: 'none', label: 'none' }], defaultValue: 'xtls-rprx-vision' })
+  }
+
+  if (tlsMode === 'reality') {
+    fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '' })
+    fields.push({ key: 'reality_private_key', label: 'Reality Private Key', type: 'password', valueType: 'string', secret: true })
+    fields.push({ key: 'reality_short_id', label: 'Reality Short ID', type: 'password', valueType: 'string', secret: true })
+  } else if (tlsMode === 'tls') {
+    fields.push({ key: 'sni', label: 'SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '' })
+  }
+
+  return fields
 }
 
 export function valueToInput(value: unknown): string {
