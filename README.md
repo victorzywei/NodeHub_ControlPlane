@@ -13,7 +13,7 @@
 - `/nodes` 节点（列表 + 详情抽屉 + 批量删除）
 - `/templates` 配置模板（内置/自定义 + 统一参数编辑器）
 - `/release` 发布中心（抽屉式直连下发，保留最近 10 次操作）
-- `/subscriptions` 订阅
+- `/subscriptions` 订阅（卡片式管理 + v2ray/clash/singbox 链接）
 - `/system` 系统
 - `/login` 登录
 

@@ -43,7 +43,7 @@ test('smoke: login -> create-node -> release -> subscription', async ({ page }) 
   // Subscription flow
   await page.getByRole('link', { name: '订阅' }).click()
   await expect(page).toHaveURL(/\/subscriptions/)
-  await page.getByRole('button', { name: '新建订阅' }).click()
+  await page.getByRole('button', { name: /创建订阅|新建订阅/ }).click()
 
   const subDrawer = page.locator('.drawer').last()
   await subDrawer.getByLabel('订阅名称').fill(subName)

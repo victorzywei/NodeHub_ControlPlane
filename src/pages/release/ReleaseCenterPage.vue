@@ -16,6 +16,7 @@ const toastStore = useToastStore()
 const loading = ref(false)
 const pending = ref(false)
 const drawerOpen = ref(false)
+const expandedLogNodeIds = ref<Set<string>>(new Set())
 
 const nodes = ref<NodeRecord[]>([])
 const templates = ref<TemplateRecord[]>([])
@@ -25,6 +26,7 @@ const keyword = ref('')
 const selectedNodes = ref<Set<string>>(new Set())
 const selectedTemplates = ref<Set<string>>(new Set())
 const paramsJson = ref('{}')
+const LOG_PREVIEW_LIMIT = 48
 
 function hasReleaseVersion(node: NodeRecord): boolean {
   return Number(node.desired_version || 0) > 0 || Number(node.applied_version || 0) > 0
@@ -72,6 +74,27 @@ function nodeLogSummary(node: NodeRecord): string {
   if (node.last_release_status === 'ok') return '部署成功'
   if (node.last_release_status === 'pending') return '部署中'
   return '-'
+}
+
+function canExpandNodeLog(node: NodeRecord): boolean {
+  const text = nodeLogSummary(node)
+  return text !== '-' && text.length > LOG_PREVIEW_LIMIT
+}
+
+function isNodeLogExpanded(nodeId: string): boolean {
+  return expandedLogNodeIds.value.has(nodeId)
+}
+
+function toggleNodeLog(nodeId: string): void {
+  if (expandedLogNodeIds.value.has(nodeId)) expandedLogNodeIds.value.delete(nodeId)
+  else expandedLogNodeIds.value.add(nodeId)
+  expandedLogNodeIds.value = new Set(expandedLogNodeIds.value)
+}
+
+function nodeLogDisplay(node: NodeRecord): string {
+  const text = nodeLogSummary(node)
+  if (text === '-' || isNodeLogExpanded(node.id) || !canExpandNodeLog(node)) return text
+  return `${text.slice(0, LOG_PREVIEW_LIMIT)}...`
 }
 
 function operationConfigSummary(operation: ReleaseRecord): string {
@@ -157,6 +180,8 @@ async function loadData(): Promise<void> {
     nodes.value = nodeRows
     templates.value = templateRows
     operations.value = operationRows
+    const validNodeIds = new Set(nodeRows.map((item) => item.id))
+    expandedLogNodeIds.value = new Set([...expandedLogNodeIds.value].filter((id) => validNodeIds.has(id)))
   } catch {
     toastStore.push('发布中心数据加载失败', 'danger')
   } finally {
@@ -235,7 +260,20 @@ onMounted(loadData)
           </span>
         </td>
         <td>{{ formatRelative(node.heartbeat_reported_at || node.last_seen_at) }}</td>
-        <td class="muted">{{ nodeLogSummary(node) }}</td>
+        <td>
+          <div class="muted" style="max-width: 360px; word-break: break-word">
+            {{ nodeLogDisplay(node) }}
+          </div>
+          <button
+            v-if="canExpandNodeLog(node)"
+            type="button"
+            class="btn btn-secondary"
+            style="margin-top: 6px; padding: 2px 10px; font-size: 12px"
+            @click="toggleNodeLog(node.id)"
+          >
+            {{ isNodeLogExpanded(node.id) ? '收起' : '展开' }}
+          </button>
+        </td>
       </tr>
       <tr v-if="!loading && filteredNodes.length === 0">
         <td colspan="7" class="muted">暂无已下发版本的节点</td>
