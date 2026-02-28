@@ -1,14 +1,18 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
-import ParamEditor from '@/components/ui/ParamEditor.vue'
 import { createTemplate, deleteTemplate, getTemplateRegistry, listTemplates, updateTemplate } from '@/api/services/templates'
 import type { TemplateRecord, TemplateRegistry } from '@/types/domain'
-import { parseJsonObject } from '@/utils/format'
+import type { TemplateParamField } from '@/utils/templateParams'
+import { generateSecretValue, getPresetTemplateParamFields, valueToInput } from '@/utils/templateParams'
 import { useToastStore } from '@/stores/toast'
+
+interface EditorParamField extends TemplateParamField {
+  custom?: boolean
+}
 
 const toastStore = useToastStore()
 
@@ -24,7 +28,9 @@ const registry = ref<TemplateRegistry>({
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingTemplate = ref<TemplateRecord | null>(null)
-const defaultsJson = ref('{}')
+const defaultsForm = reactive<Record<string, string>>({})
+const customParamKey = ref('')
+const customParamValue = ref('')
 
 const form = reactive({
   name: '',
@@ -47,6 +53,88 @@ const filteredTemplates = computed(() => {
 const builtinRows = computed(() => filteredTemplates.value.filter((item) => item.kind === 'builtin'))
 const customRows = computed(() => filteredTemplates.value.filter((item) => item.kind === 'custom'))
 
+const presetParamFields = computed<EditorParamField[]>(() => {
+  return getPresetTemplateParamFields(form.protocol, form.transport, form.tls_mode)
+})
+
+const presetParamKeySet = computed(() => new Set(presetParamFields.value.map((item) => item.key)))
+
+const extraParamFields = computed<EditorParamField[]>(() => {
+  return Object.keys(defaultsForm)
+    .filter((key) => !presetParamKeySet.value.has(key))
+    .map((key) => ({
+      key,
+      label: key,
+      type: 'text',
+      valueType: 'string',
+      custom: true,
+    }))
+})
+
+const allParamFields = computed<EditorParamField[]>(() => {
+  return [...presetParamFields.value, ...extraParamFields.value]
+})
+
+function replaceDefaultsForm(next: Record<string, string>): void {
+  Object.keys(defaultsForm).forEach((key) => {
+    delete defaultsForm[key]
+  })
+  Object.entries(next).forEach(([key, value]) => {
+    defaultsForm[key] = value
+  })
+}
+
+function syncDefaultsForm(source: Record<string, unknown>): void {
+  const next: Record<string, string> = {}
+  const consumed = new Set<string>()
+
+  presetParamFields.value.forEach((field) => {
+    consumed.add(field.key)
+    const raw = source[field.key]
+    let value = valueToInput(raw)
+
+    if (!value) {
+      if (field.secret) {
+        value = generateSecretValue(field.key)
+      } else if (field.defaultValue !== undefined) {
+        value = String(field.defaultValue)
+      } else if (field.type === 'select' && field.options && field.options.length > 0) {
+        value = field.options[0].value
+      }
+    }
+
+    next[field.key] = value
+  })
+
+  Object.entries(source).forEach(([key, value]) => {
+    if (consumed.has(key)) return
+    next[key] = valueToInput(value)
+  })
+
+  replaceDefaultsForm(next)
+}
+
+function buildDefaultsPayload(): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  const fieldMap = new Map(allParamFields.value.map((field) => [field.key, field]))
+
+  Object.entries(defaultsForm).forEach(([key, rawValue]) => {
+    const value = String(rawValue ?? '')
+    if (value.trim() === '') return
+
+    const field = fieldMap.get(key)
+    if (field?.valueType === 'number') {
+      const num = Number(value)
+      result[key] = Number.isFinite(num) ? num : value
+      return
+    }
+
+    result[key] = value
+  })
+
+  return result
+}
+
 async function loadData(): Promise<void> {
   loading.value = true
   try {
@@ -68,7 +156,9 @@ function openCreate(): void {
   form.transport = registry.value.transports[0]?.key || ''
   form.tls_mode = registry.value.tls_modes[0]?.key || ''
   form.description = ''
-  defaultsJson.value = '{}'
+  syncDefaultsForm({})
+  customParamKey.value = ''
+  customParamValue.value = ''
   editorOpen.value = true
 }
 
@@ -80,13 +170,41 @@ function openEdit(template: TemplateRecord): void {
   form.transport = template.transport
   form.tls_mode = template.tls_mode
   form.description = template.description
-  defaultsJson.value = JSON.stringify(template.defaults || {}, null, 2)
+  syncDefaultsForm(template.defaults || {})
+  customParamKey.value = ''
+  customParamValue.value = ''
   editorOpen.value = true
+}
+
+function addCustomParam(): void {
+  const key = customParamKey.value.trim()
+  if (!key) {
+    toastStore.push('参数名不能为空', 'warning')
+    return
+  }
+
+  if (defaultsForm[key] !== undefined) {
+    toastStore.push('参数已存在', 'warning')
+    return
+  }
+
+  defaultsForm[key] = customParamValue.value
+  customParamKey.value = ''
+  customParamValue.value = ''
+}
+
+function removeCustomParam(key: string): void {
+  if (presetParamKeySet.value.has(key)) return
+  delete defaultsForm[key]
+}
+
+function regenSecret(key: string): void {
+  defaultsForm[key] = generateSecretValue(key)
 }
 
 async function saveTemplate(): Promise<void> {
   try {
-    const defaults = parseJsonObject(defaultsJson.value)
+    const defaults = buildDefaultsPayload()
 
     if (!form.name.trim()) {
       toastStore.push('模板名称不能为空', 'warning')
@@ -115,7 +233,7 @@ async function saveTemplate(): Promise<void> {
     editorOpen.value = false
     await loadData()
   } catch {
-    toastStore.push('模板保存失败，请检查参数 JSON', 'danger')
+    toastStore.push('模板保存失败', 'danger')
   }
 }
 
@@ -130,6 +248,14 @@ async function removeTemplate(): Promise<void> {
     toastStore.push('模板删除失败', 'danger')
   }
 }
+
+watch(
+  () => [form.protocol, form.transport, form.tls_mode],
+  () => {
+    if (!editorOpen.value || editorMode.value !== 'create') return
+    syncDefaultsForm(buildDefaultsPayload())
+  },
+)
 
 onMounted(loadData)
 </script>
@@ -224,7 +350,48 @@ onMounted(loadData)
       <input v-model="form.description" class="input" />
     </label>
 
-    <ParamEditor v-model="defaultsJson" label="参数编辑器" hint="统一 JSON 参数编辑器" />
+    <article class="panel panel-pad" style="display: grid; gap: 10px">
+      <strong>参数编辑器</strong>
+
+      <label v-for="field in allParamFields" :key="field.key" style="display: grid; gap: 6px">
+        <span style="font-weight: 700">{{ field.label }}</span>
+        <div style="display: flex; gap: 8px; align-items: center">
+          <select
+            v-if="field.type === 'select'"
+            v-model="defaultsForm[field.key]"
+            class="select"
+            style="flex: 1"
+          >
+            <option v-for="option in field.options || []" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+
+          <input
+            v-else
+            v-model="defaultsForm[field.key]"
+            class="input"
+            style="flex: 1"
+            :type="field.type === 'number' ? 'number' : field.type === 'password' ? 'password' : 'text'"
+            :placeholder="field.placeholder || ''"
+          />
+
+          <button v-if="field.secret" class="btn btn-secondary" type="button" @click="regenSecret(field.key)">生成</button>
+          <button v-if="field.custom" class="btn btn-danger" type="button" @click="removeCustomParam(field.key)">移除</button>
+        </div>
+      </label>
+
+      <div style="display: grid; gap: 6px; margin-top: 6px">
+        <span style="font-weight: 700">添加自定义参数</span>
+        <div style="display: flex; gap: 8px">
+          <input v-model="customParamKey" class="input" placeholder="参数名" style="flex: 1" />
+          <input v-model="customParamValue" class="input" placeholder="参数值" style="flex: 1" />
+          <button class="btn btn-secondary" type="button" @click="addCustomParam">添加</button>
+        </div>
+      </div>
+
+      <div class="muted" style="font-size: 12px">可枚举参数自动使用下拉框，其余参数使用输入框。</div>
+    </article>
 
     <div style="display: flex; gap: 8px">
       <button class="btn btn-primary" @click="saveTemplate">保存</button>

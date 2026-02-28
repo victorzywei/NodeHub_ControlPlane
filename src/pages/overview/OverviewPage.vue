@@ -55,8 +55,8 @@ onMounted(load)
       <div class="stat-value">{{ percent(onlineRate) }}</div>
     </article>
     <article class="stat-card">
-      <div class="muted">最近发布</div>
-      <div class="stat-value">{{ latestRelease ? `v${latestRelease.version}` : '-' }}</div>
+      <div class="muted">最近操作</div>
+      <div class="stat-value" style="font-size: 20px">{{ latestRelease ? formatDateTime(latestRelease.created_at) : '-' }}</div>
     </article>
     <article class="stat-card">
       <div class="muted">失败告警</div>
@@ -96,7 +96,7 @@ onMounted(load)
     <section class="panel panel-pad" style="display: grid; gap: 10px; align-content: start">
       <h3 style="margin: 0">容量概览</h3>
       <div class="muted">配置模板总数：{{ templateCount }}</div>
-      <div class="muted">发布记录总数：{{ releases.length }}</div>
+      <div class="muted">最近操作记录：{{ releases.length }}</div>
       <div class="muted">节点总数：{{ nodes.length }}</div>
       <div class="muted">最后刷新：{{ new Date().toLocaleTimeString('zh-CN', { hour12: false }) }}</div>
     </section>

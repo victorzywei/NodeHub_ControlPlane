@@ -1,34 +1,47 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import Stepper from '@/components/ui/Stepper.vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
+import FilterBar from '@/components/ui/FilterBar.vue'
+import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ParamEditor from '@/components/ui/ParamEditor.vue'
 import { listNodes } from '@/api/services/nodes'
 import { listTemplates } from '@/api/services/templates'
-import { createRelease } from '@/api/services/releases'
-import type { NodeRecord, TemplateRecord, ReleaseRecord } from '@/types/domain'
-import { parseJsonObject } from '@/utils/format'
+import { createRelease, listReleases } from '@/api/services/releases'
+import type { NodeRecord, ReleaseRecord, TemplateRecord } from '@/types/domain'
+import { formatDateTime, formatRelative, parseJsonObject } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
 const toastStore = useToastStore()
 
-const steps = ['选节点', '选配置', '参数预览', '发布确认']
-const activeStep = ref(0)
+const loading = ref(false)
+const pending = ref(false)
+const drawerOpen = ref(false)
 
 const nodes = ref<NodeRecord[]>([])
 const templates = ref<TemplateRecord[]>([])
+const operations = ref<ReleaseRecord[]>([])
+
+const keyword = ref('')
 const selectedNodes = ref<Set<string>>(new Set())
 const selectedTemplates = ref<Set<string>>(new Set())
 const paramsJson = ref('{}')
-const pending = ref(false)
-const latestRelease = ref<ReleaseRecord | null>(null)
 
-const selectedNodeRows = computed(() => nodes.value.filter((item) => selectedNodes.value.has(item.id)))
-const selectedTemplateRows = computed(() => templates.value.filter((item) => selectedTemplates.value.has(item.id)))
+const filteredNodes = computed(() => {
+  const text = keyword.value.trim().toLowerCase()
+  if (!text) return nodes.value
 
-const selectedNodeTypes = computed(() => {
-  return new Set(selectedNodeRows.value.map((item) => item.node_type))
+  return nodes.value.filter((node) => {
+    return (
+      node.name.toLowerCase().includes(text) ||
+      node.id.toLowerCase().includes(text) ||
+      node.desired_config_summary.toLowerCase().includes(text) ||
+      node.applied_config_summary.toLowerCase().includes(text)
+    )
+  })
 })
+
+const selectedNodeRows = computed(() => nodes.value.filter((node) => selectedNodes.value.has(node.id)))
+const selectedNodeTypes = computed(() => new Set(selectedNodeRows.value.map((node) => node.node_type)))
 
 const templatesWithStatus = computed(() => {
   return templates.value.map((template) => {
@@ -45,14 +58,15 @@ const templatesWithStatus = computed(() => {
   })
 })
 
-async function loadData(): Promise<void> {
-  try {
-    const [nodeRows, templateRows] = await Promise.all([listNodes(), listTemplates()])
-    nodes.value = nodeRows
-    templates.value = templateRows
-  } catch {
-    toastStore.push('发布中心数据加载失败', 'danger')
-  }
+function resetDrawerForm(): void {
+  selectedNodes.value = new Set()
+  selectedTemplates.value = new Set()
+  paramsJson.value = '{}'
+}
+
+function openDrawer(): void {
+  resetDrawerForm()
+  drawerOpen.value = true
 }
 
 function toggleNode(id: string): void {
@@ -68,36 +82,51 @@ function toggleTemplate(id: string, compatible: boolean): void {
   selectedTemplates.value = new Set(selectedTemplates.value)
 }
 
-function nextStep(): void {
-  if (activeStep.value === 0 && selectedNodes.value.size === 0) {
+async function loadData(): Promise<void> {
+  loading.value = true
+  try {
+    const [nodeRows, templateRows, operationRows] = await Promise.all([listNodes(), listTemplates(), listReleases()])
+    nodes.value = nodeRows
+    templates.value = templateRows
+    operations.value = operationRows
+  } catch {
+    toastStore.push('发布中心数据加载失败', 'danger')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function applyToNodes(): Promise<void> {
+  if (pending.value) return
+
+  if (selectedNodes.value.size === 0) {
     toastStore.push('至少选择一个节点', 'warning')
     return
   }
-  if (activeStep.value === 1 && selectedTemplates.value.size === 0) {
+
+  if (selectedTemplates.value.size === 0) {
     toastStore.push('至少选择一个模板', 'warning')
     return
   }
-  if (activeStep.value < steps.length - 1) activeStep.value += 1
-}
 
-function prevStep(): void {
-  if (activeStep.value > 0) activeStep.value -= 1
-}
-
-async function publish(): Promise<void> {
-  if (pending.value) return
   pending.value = true
   try {
     const params = parseJsonObject(paramsJson.value)
-    latestRelease.value = await createRelease({
+    const operation = await createRelease({
       node_ids: [...selectedNodes.value],
       template_ids: [...selectedTemplates.value],
       params,
     })
-    toastStore.push('发布任务已创建', 'success')
-    activeStep.value = 3
+
+    const queued = operation.results.filter((item) => item.status === 'queued').length
+    const total = operation.results.length
+    const tone = queued === total ? 'success' : 'warning'
+
+    toastStore.push(`已下发配置 ${queued}/${total}`, tone)
+    drawerOpen.value = false
+    await loadData()
   } catch {
-    toastStore.push('发布失败，请检查参数', 'danger')
+    toastStore.push('配置下发失败，请检查参数', 'danger')
   } finally {
     pending.value = false
   }
@@ -107,97 +136,102 @@ onMounted(loadData)
 </script>
 
 <template>
-  <section class="panel panel-pad" style="display: grid; gap: 14px">
-    <Stepper :steps="steps" :active-index="activeStep" />
+  <FilterBar>
+    <input v-model="keyword" class="input" style="max-width: 280px" placeholder="搜索节点或配置" />
+    <button class="btn btn-primary" style="margin-left: auto" @click="openDrawer">新增应用</button>
+  </FilterBar>
 
-    <section v-if="activeStep === 0">
-      <DataGrid title="步骤 1: 选择节点">
-        <thead>
-          <tr>
-            <th></th>
-            <th>节点</th>
-            <th>类型</th>
-            <th>区域</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="node in nodes" :key="node.id">
-            <td><input type="checkbox" :checked="selectedNodes.has(node.id)" @change="toggleNode(node.id)" /></td>
-            <td>{{ node.name }}</td>
-            <td>{{ node.node_type }}</td>
-            <td>{{ node.region || '-' }}</td>
-            <td>{{ node.online ? '在线' : '离线' }}</td>
-          </tr>
-        </tbody>
-      </DataGrid>
-    </section>
+  <DataGrid title="节点配置状态">
+    <thead>
+      <tr>
+        <th>节点名称</th>
+        <th>版本</th>
+        <th>配置</th>
+        <th>状态</th>
+        <th>最后上报</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="node in filteredNodes" :key="node.id">
+        <td>
+          <div style="font-weight: 700">{{ node.name }}</div>
+          <div class="muted" style="font-size: 12px">{{ node.id }}</div>
+        </td>
+        <td>r{{ node.applied_version }} -> r{{ node.desired_version }}</td>
+        <td>{{ node.desired_config_summary || node.applied_config_summary || '-' }}</td>
+        <td>
+          <span class="badge" :class="node.last_release_status === 'failed' ? 'danger' : node.last_release_status === 'ok' ? 'success' : 'warning'">
+            {{ node.last_release_status }}
+          </span>
+        </td>
+        <td>{{ formatRelative(node.heartbeat_reported_at || node.last_seen_at) }}</td>
+      </tr>
+      <tr v-if="!loading && filteredNodes.length === 0">
+        <td colspan="5" class="muted">暂无节点</td>
+      </tr>
+    </tbody>
+  </DataGrid>
 
-    <section v-if="activeStep === 1">
-      <DataGrid title="步骤 2: 选择模板">
-        <thead>
-          <tr>
-            <th></th>
-            <th>模板</th>
-            <th>协议</th>
-            <th>兼容性</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="template in templatesWithStatus" :key="template.id">
-            <td>
-              <input
-                type="checkbox"
-                :checked="selectedTemplates.has(template.id)"
-                :disabled="!template.compatible"
-                @change="toggleTemplate(template.id, template.compatible)"
-              />
-            </td>
-            <td>{{ template.name }}</td>
-            <td>{{ template.protocol }} / {{ template.transport }}</td>
-            <td>
-              <span v-if="template.compatible" class="badge success">兼容</span>
-              <span v-else class="badge warning">{{ template.warning }}</span>
-            </td>
-          </tr>
-        </tbody>
-      </DataGrid>
-    </section>
+  <DataGrid title="最近10次操作">
+    <thead>
+      <tr>
+        <th>时间</th>
+        <th>配置摘要</th>
+        <th>节点结果</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="operation in operations" :key="operation.id">
+        <td>{{ formatDateTime(operation.created_at) }}</td>
+        <td>{{ operation.summary || operation.template_names.join(' + ') || '-' }}</td>
+        <td>
+          成功 {{ operation.results.filter((item) => item.status === 'queued').length }} /
+          失败 {{ operation.results.filter((item) => item.status === 'failed').length }}
+        </td>
+      </tr>
+      <tr v-if="!loading && operations.length === 0">
+        <td colspan="3" class="muted">暂无操作记录</td>
+      </tr>
+    </tbody>
+  </DataGrid>
 
-    <section v-if="activeStep === 2" style="display: grid; gap: 14px">
-      <article class="panel panel-pad">
-        <h3 style="margin-top: 0">步骤 3: 参数预览</h3>
-        <p class="muted">将在 {{ selectedNodeRows.length }} 个节点上应用 {{ selectedTemplateRows.length }} 套模板。</p>
-        <ParamEditor
-          v-model="paramsJson"
-          label="发布参数"
-          :hint="'例如 { force: true, trace: manual }'"
-        />
-      </article>
-    </section>
+  <DetailDrawer v-model="drawerOpen" title="新增节点应用">
+    <article class="panel panel-pad" style="display: grid; gap: 10px">
+      <strong>1) 选择节点</strong>
+      <div style="max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px">
+        <label v-for="node in nodes" :key="node.id" style="display: flex; gap: 8px; align-items: center; padding: 6px 0">
+          <input type="checkbox" :checked="selectedNodes.has(node.id)" @change="toggleNode(node.id)" />
+          <span>{{ node.name }}</span>
+          <span class="muted" style="margin-left: auto; font-size: 12px">{{ node.node_type }}</span>
+        </label>
+      </div>
+    </article>
 
-    <section v-if="activeStep === 3" style="display: grid; gap: 12px">
-      <article class="panel panel-pad">
-        <h3 style="margin-top: 0">步骤 4: 发布确认</h3>
-        <div class="muted">目标节点：{{ selectedNodeRows.map((item) => item.name).join(', ') || '-' }}</div>
-        <div class="muted">发布模板：{{ selectedTemplateRows.map((item) => item.name).join(', ') || '-' }}</div>
-        <div class="muted">参数摘要：{{ paramsJson }}</div>
-      </article>
+    <article class="panel panel-pad" style="display: grid; gap: 10px">
+      <strong>2) 选择配置模板</strong>
+      <div style="max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px">
+        <label v-for="template in templatesWithStatus" :key="template.id" style="display: grid; gap: 4px; padding: 6px 0">
+          <span style="display: flex; gap: 8px; align-items: center">
+            <input
+              type="checkbox"
+              :checked="selectedTemplates.has(template.id)"
+              :disabled="!template.compatible"
+              @change="toggleTemplate(template.id, template.compatible)"
+            />
+            <span>{{ template.name }}</span>
+            <span v-if="!template.compatible" class="badge warning" style="margin-left: auto">{{ template.warning }}</span>
+          </span>
+          <span class="muted" style="font-size: 12px; margin-left: 22px">{{ template.protocol }} / {{ template.transport }} / {{ template.tls_mode }}</span>
+        </label>
+      </div>
+    </article>
 
-      <article v-if="latestRelease" class="panel panel-pad">
-        <strong>最近发布结果</strong>
-        <div class="muted">发布号：v{{ latestRelease.version }}</div>
-        <div class="muted">创建时间：{{ latestRelease.created_at }}</div>
-      </article>
-    </section>
+    <ParamEditor v-model="paramsJson" label="3) 自定义参数" hint="JSON 对象，可选。" />
 
-    <div style="display: flex; gap: 8px; justify-content: flex-end">
-      <button class="btn btn-secondary" :disabled="activeStep === 0" @click="prevStep">上一步</button>
-      <button v-if="activeStep < 2" class="btn btn-primary" @click="nextStep">下一步</button>
-      <button v-else-if="activeStep === 2" class="btn btn-primary" :disabled="pending" @click="publish">
-        {{ pending ? '发布中...' : '执行发布' }}
+    <div style="display: flex; justify-content: flex-end">
+      <button class="btn btn-primary" :disabled="pending" @click="applyToNodes">
+        {{ pending ? '应用中...' : '立即应用' }}
       </button>
-      <button v-else class="btn btn-primary" @click="activeStep = 0">新建发布</button>
     </div>
-  </section>
+  </DetailDrawer>
 </template>

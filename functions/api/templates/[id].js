@@ -1,5 +1,6 @@
-﻿import { requireAdmin } from '../../_lib/auth.js'
+import { requireAdmin } from '../../_lib/auth.js'
 import { BUILTIN_TEMPLATES } from '../../_lib/constants.js'
+import { applyTemplateAutoDefaults } from '../../_lib/template.js'
 import { KEY, indexRemove, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
@@ -7,20 +8,51 @@ function findBuiltin(id) {
   return BUILTIN_TEMPLATES.find((item) => item.id === id)
 }
 
+function toDefaults(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value
+}
+
 async function getMergedBuiltin(kv, id) {
   const builtin = findBuiltin(id)
   if (!builtin) return null
+
+  const now = new Date().toISOString()
   const override = await kvGetJson(kv, KEY.templateOverride(id), null)
-  if (!override) return { ...builtin }
+  const mergedDefaults = {
+    ...(builtin.defaults || {}),
+    ...(override?.defaults || {}),
+  }
+
+  const defaults = applyTemplateAutoDefaults({
+    protocol: builtin.protocol,
+    transport: builtin.transport,
+    tlsMode: builtin.tls_mode,
+    defaults: mergedDefaults,
+  })
+
+  let effectiveOverride = override
+  if (JSON.stringify(defaults) !== JSON.stringify(mergedDefaults)) {
+    effectiveOverride = {
+      ...(override || {}),
+      defaults: {
+        ...(override?.defaults || {}),
+        ...defaults,
+      },
+      updated_at: now,
+    }
+    await kvPutJson(kv, KEY.templateOverride(id), effectiveOverride)
+  }
+
   return {
     ...builtin,
-    name: override.name || builtin.name,
-    description: override.description || builtin.description,
+    name: effectiveOverride?.name || builtin.name,
+    description: effectiveOverride?.description || builtin.description,
     defaults: {
       ...(builtin.defaults || {}),
-      ...(override.defaults || {}),
+      ...(effectiveOverride?.defaults || {}),
     },
-    updated_at: override.updated_at || builtin.updated_at || builtin.created_at || new Date().toISOString(),
+    updated_at: effectiveOverride?.updated_at || builtin.updated_at || builtin.created_at || now,
   }
 }
 
@@ -48,14 +80,22 @@ export async function onRequestPatch({ request, env, params }) {
   const builtin = findBuiltin(params.id)
   if (builtin) {
     const existing = await kvGetJson(kv, KEY.templateOverride(params.id), {})
+    const mergedDefaults = {
+      ...(builtin.defaults || {}),
+      ...(existing.defaults || {}),
+      ...toDefaults(body.defaults),
+    }
+
     const override = {
       ...existing,
       name: body.name !== undefined ? String(body.name) : existing.name,
       description: body.description !== undefined ? String(body.description) : existing.description,
-      defaults: {
-        ...(existing.defaults || {}),
-        ...(body.defaults || {}),
-      },
+      defaults: applyTemplateAutoDefaults({
+        protocol: builtin.protocol,
+        transport: builtin.transport,
+        tlsMode: builtin.tls_mode,
+        defaults: mergedDefaults,
+      }),
       updated_at: now,
     }
     await kvPutJson(kv, KEY.templateOverride(params.id), override)
@@ -65,9 +105,20 @@ export async function onRequestPatch({ request, env, params }) {
   const current = await kvGetJson(kv, KEY.template(params.id), null)
   if (!current) return fail('NOT_FOUND', 'Template not found', 404)
 
-  const fields = ['name', 'description', 'defaults', 'node_types']
-  fields.forEach((field) => {
-    if (body[field] !== undefined) current[field] = body[field]
+  if (body.name !== undefined) current.name = String(body.name)
+  if (body.description !== undefined) current.description = String(body.description)
+  if (body.node_types !== undefined) current.node_types = body.node_types
+
+  const mergedDefaults = {
+    ...(current.defaults || {}),
+    ...toDefaults(body.defaults),
+  }
+
+  current.defaults = applyTemplateAutoDefaults({
+    protocol: current.protocol,
+    transport: current.transport,
+    tlsMode: current.tls_mode,
+    defaults: mergedDefaults,
   })
 
   current.updated_at = now

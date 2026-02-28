@@ -1,26 +1,56 @@
-﻿import { requireAdmin } from '../../_lib/auth.js'
+import { requireAdmin } from '../../_lib/auth.js'
 import { BUILTIN_TEMPLATES, TEMPLATE_REGISTRY } from '../../_lib/constants.js'
+import { applyTemplateAutoDefaults } from '../../_lib/template.js'
 import { KEY, createId, hydrateByIndex, indexUpsert, kvGetJson, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
+function toDefaults(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value
+}
+
+async function buildBuiltinRow(kv, base) {
+  const now = new Date().toISOString()
+  const override = await kvGetJson(kv, KEY.templateOverride(base.id), null)
+  const mergedDefaults = {
+    ...(base.defaults || {}),
+    ...(override?.defaults || {}),
+  }
+
+  const defaults = applyTemplateAutoDefaults({
+    protocol: base.protocol,
+    transport: base.transport,
+    tlsMode: base.tls_mode,
+    defaults: mergedDefaults,
+  })
+
+  let effectiveOverride = override
+  if (JSON.stringify(defaults) !== JSON.stringify(mergedDefaults)) {
+    effectiveOverride = {
+      ...(override || {}),
+      defaults: {
+        ...(override?.defaults || {}),
+        ...defaults,
+      },
+      updated_at: now,
+    }
+    await kvPutJson(kv, KEY.templateOverride(base.id), effectiveOverride)
+  }
+
+  return {
+    ...base,
+    name: effectiveOverride?.name || base.name,
+    description: effectiveOverride?.description || base.description,
+    defaults: {
+      ...(base.defaults || {}),
+      ...(effectiveOverride?.defaults || {}),
+    },
+    updated_at: effectiveOverride?.updated_at || base.updated_at || base.created_at || now,
+  }
+}
+
 async function listBuiltinTemplates(kv) {
-  const rows = await Promise.all(
-    BUILTIN_TEMPLATES.map(async (base) => {
-      const override = await kvGetJson(kv, KEY.templateOverride(base.id), null)
-      if (!override) return { ...base }
-      return {
-        ...base,
-        name: override.name || base.name,
-        description: override.description || base.description,
-        defaults: {
-          ...(base.defaults || {}),
-          ...(override.defaults || {}),
-        },
-        updated_at: override.updated_at || base.updated_at || base.created_at || new Date().toISOString(),
-      }
-    }),
-  )
-  return rows
+  return Promise.all(BUILTIN_TEMPLATES.map((base) => buildBuiltinRow(kv, base)))
 }
 
 export async function onRequestGet({ request, env }) {
@@ -63,6 +93,13 @@ export async function onRequestPost({ request, env }) {
 
   const id = createId('tpl')
   const now = new Date().toISOString()
+  const defaults = applyTemplateAutoDefaults({
+    protocol,
+    transport,
+    tlsMode,
+    defaults: toDefaults(body.defaults),
+  })
+
   const template = {
     id,
     kind: 'custom',
@@ -72,7 +109,7 @@ export async function onRequestPost({ request, env }) {
     tls_mode: tlsMode,
     node_types: Array.isArray(body.node_types) && body.node_types.length > 0 ? body.node_types : ['vps', 'edge'],
     description: String(body.description || ''),
-    defaults: typeof body.defaults === 'object' && body.defaults ? body.defaults : {},
+    defaults,
     created_at: now,
     updated_at: now,
   }

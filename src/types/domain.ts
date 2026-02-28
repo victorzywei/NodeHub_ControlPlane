@@ -1,4 +1,21 @@
-﻿export type NodeKind = 'vps' | 'edge'
+export type NodeKind = 'vps' | 'edge'
+
+export interface NodeDesiredConfig {
+  rev: number
+  template_ids: string[]
+  template_names: string[]
+  templates: Array<{
+    id: string
+    name: string
+    protocol: string
+    transport: string
+    tls_mode: string
+    defaults: Record<string, unknown>
+  }>
+  params: Record<string, unknown>
+  operation_id: string
+  created_at: string
+}
 
 export interface NodeRecord {
   id: string
@@ -22,6 +39,9 @@ export interface NodeRecord {
   memory_total_mb: number | null
   memory_usage_percent: number | null
   heartbeat_reported_at: string | null
+  desired_config: NodeDesiredConfig | null
+  desired_config_summary: string
+  applied_config_summary: string
   last_release_status: 'idle' | 'pending' | 'ok' | 'failed'
   last_release_message: string
   created_at: string
@@ -54,12 +74,17 @@ export interface SubscriptionRecord {
 
 export interface ReleaseRecord {
   id: string
-  version: number
+  mode: 'direct_apply'
   node_ids: string[]
   template_ids: string[]
+  template_names: string[]
+  summary: string
+  params: Record<string, unknown>
   results: Array<{
     node_id: string
+    node_name?: string
     status: 'queued' | 'failed'
+    desired_version?: number
     reason?: string
   }>
   created_at: string

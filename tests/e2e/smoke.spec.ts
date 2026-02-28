@@ -28,17 +28,17 @@ test('smoke: login -> create-node -> release -> subscription', async ({ page }) 
 
   await expect(page.getByRole('cell', { name: nodeName })).toBeVisible()
 
-  // Release flow
+  // Release flow (drawer apply)
   await page.getByRole('link', { name: '发布中心' }).click()
   await expect(page).toHaveURL(/\/release/)
 
-  await page.getByRole('row', { name: new RegExp(nodeName) }).locator('input[type="checkbox"]').check()
-  await page.getByRole('button', { name: '下一步' }).click()
-  await page.locator('tbody tr').first().locator('input[type="checkbox"]').check()
-  await page.getByRole('button', { name: '下一步' }).click()
-  await page.getByRole('button', { name: '执行发布' }).click()
+  await page.getByRole('button', { name: '新增应用' }).click()
+  const releaseDrawer = page.locator('.drawer').last()
+  await releaseDrawer.getByLabel(nodeName).check()
+  await releaseDrawer.locator('article').nth(1).locator('input[type="checkbox"]:not([disabled])').first().check()
+  await releaseDrawer.getByRole('button', { name: '立即应用' }).click()
 
-  await expect(page.getByText('最近发布结果')).toBeVisible()
+  await expect(page.getByText('最近10次操作')).toBeVisible()
 
   // Subscription flow
   await page.getByRole('link', { name: '订阅' }).click()

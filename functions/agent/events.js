@@ -33,11 +33,17 @@ function normalizeEvent(raw) {
 function applyEvent(node, event) {
   if (event.applied_version !== null) {
     node.applied_version = Math.max(Number(node.applied_version || 0), event.applied_version)
+    if (Number(node.applied_version || 0) >= Number(node.desired_version || 0) && node.desired_config_summary) {
+      node.applied_config_summary = String(node.desired_config_summary || '')
+    }
   }
 
   if (event.status === 'ok') {
     node.last_release_status = 'ok'
     node.last_release_message = event.message || `release applied v${Number(node.applied_version || 0)}`
+    if (node.desired_config_summary) {
+      node.applied_config_summary = String(node.desired_config_summary || '')
+    }
     return
   }
 
@@ -91,6 +97,7 @@ export async function onRequestPost({ request, env }) {
     accepted,
     rejected,
     applied_version: Number(node.applied_version || 0),
+    applied_config_summary: String(node.applied_config_summary || ''),
     last_release_status: node.last_release_status,
     last_release_message: node.last_release_message,
   })

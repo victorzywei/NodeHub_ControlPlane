@@ -10,6 +10,10 @@ function normalizeNode(node) {
   const memoryUsed = Number(node.memory_used_mb)
   const memoryTotal = Number(node.memory_total_mb)
   const memoryUsage = Number(node.memory_usage_percent)
+  const desiredConfig =
+    node.desired_config && typeof node.desired_config === 'object' && !Array.isArray(node.desired_config)
+      ? node.desired_config
+      : null
 
   return {
     ...node,
@@ -21,6 +25,9 @@ function normalizeNode(node) {
     memory_total_mb: Number.isFinite(memoryTotal) ? memoryTotal : null,
     memory_usage_percent: Number.isFinite(memoryUsage) ? memoryUsage : null,
     heartbeat_reported_at: node.heartbeat_reported_at ? String(node.heartbeat_reported_at) : null,
+    desired_config: desiredConfig,
+    desired_config_summary: String(node.desired_config_summary || ''),
+    applied_config_summary: String(node.applied_config_summary || ''),
     online,
   }
 }
