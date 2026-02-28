@@ -170,36 +170,33 @@ onMounted(loadData)
 
 <template>
   <section class="panel panel-pad sub-header">
-    <h2 class="sub-title">订阅管理</h2>
+    <h2 style="margin: 0">订阅管理</h2>
     <button class="btn btn-primary" @click="openCreate">+ 创建订阅</button>
   </section>
 
   <section class="sub-stack">
-    <article v-for="sub in subscriptions" :key="sub.token" class="sub-card">
-      <header class="sub-card-head">
-        <div class="sub-card-meta">
-          <div class="sub-name-row">
-            <strong class="sub-name">{{ sub.name || '未命名订阅' }}</strong>
-            <span class="sub-dot" :class="sub.enabled ? 'online' : 'offline'" />
-            <span class="sub-status" :class="sub.enabled ? 'enabled' : 'disabled'">
+    <article v-for="sub in subscriptions" :key="sub.token" class="panel panel-pad sub-card">
+      <header class="sub-head">
+        <div style="display: grid; gap: 6px">
+          <div style="display: flex; align-items: center; gap: 8px">
+            <strong style="font-size: 22px; line-height: 1.2">{{ sub.name || '未命名订阅' }}</strong>
+            <span class="badge" :class="sub.enabled ? 'success' : 'warning'">
               {{ sub.enabled ? '启用' : '禁用' }}
             </span>
           </div>
-          <div class="sub-meta-line">
-            可见节点: {{ visibleNodesText(sub) }} · 创建: {{ formatDateTime(sub.created_at) }}
-          </div>
-          <div class="sub-meta-line">更新时间: {{ formatDateTime(sub.updated_at) }}</div>
-          <div v-if="sub.remark" class="sub-meta-line">备注: {{ sub.remark }}</div>
+          <div class="muted">可见节点: {{ visibleNodesText(sub) }}</div>
+          <div class="muted">创建: {{ formatDateTime(sub.created_at) }} · 更新: {{ formatDateTime(sub.updated_at) }}</div>
+          <div v-if="sub.remark" class="muted">备注: {{ sub.remark }}</div>
         </div>
 
-        <div class="sub-actions">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end">
           <button class="btn btn-secondary" @click="openEdit(sub)">编辑</button>
           <button class="btn btn-secondary" @click="toggleEnabled(sub)">{{ sub.enabled ? '禁用' : '启用' }}</button>
           <button class="btn btn-danger" @click="requestDelete(sub.token)">删除</button>
         </div>
       </header>
 
-      <section class="sub-links">
+      <section style="display: grid; gap: 8px; margin-top: 12px">
         <div v-for="item in linkFormats" :key="item.key" class="sub-link-row">
           <span class="sub-link-label">{{ item.label }}:</span>
           <code class="sub-link-text">{{ subLink(sub.token, item.key) }}</code>
@@ -259,95 +256,19 @@ onMounted(loadData)
   justify-content: space-between;
 }
 
-.sub-title {
-  margin: 0;
-  font-size: 28px;
-  letter-spacing: 0.02em;
-}
-
 .sub-stack {
   display: grid;
   gap: 14px;
 }
 
 .sub-card {
-  border: 1px solid var(--border-soft);
   border-radius: 16px;
-  background:
-    radial-gradient(circle at 95% 0%, rgba(14, 126, 111, 0.12), transparent 42%),
-    linear-gradient(180deg, #ffffff, #f9fbf4);
-  color: var(--text-primary);
-  padding: 16px;
-  box-shadow: var(--shadow-soft);
 }
 
-.sub-card-head {
+.sub-head {
   display: flex;
   gap: 12px;
   justify-content: space-between;
-}
-
-.sub-card-meta {
-  display: grid;
-  gap: 6px;
-}
-
-.sub-name-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sub-name {
-  font-size: 24px;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-.sub-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-}
-
-.sub-dot.online {
-  background: var(--success);
-}
-
-.sub-dot.offline {
-  background: var(--warning);
-}
-
-.sub-status {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.sub-status.enabled {
-  color: var(--success);
-}
-
-.sub-status.disabled {
-  color: var(--warning);
-}
-
-.sub-meta-line {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.sub-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: flex-end;
-}
-
-.sub-links {
-  margin-top: 14px;
-  display: grid;
-  gap: 8px;
 }
 
 .sub-link-row {
@@ -381,16 +302,8 @@ onMounted(loadData)
 }
 
 @media (max-width: 860px) {
-  .sub-title {
-    font-size: 22px;
-  }
-
-  .sub-card-head {
+  .sub-head {
     flex-direction: column;
-  }
-
-  .sub-actions {
-    justify-content: flex-start;
   }
 
   .sub-link-row {
