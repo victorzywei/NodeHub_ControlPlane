@@ -109,7 +109,17 @@ if [[ -n "$XRAY_ARCH" ]]; then
   if ! command -v xray >/dev/null 2>&1 && [[ ! -x "$XRAY_BIN" ]]; then
     echo "Downloading latest Xray-core..."
     mkdir -p /tmp/nodehub-xray
-    if curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"; then
+    
+    # Construct download URL with optional GitHub mirror
+    if [[ -n "$GITHUB_MIRROR" ]]; then
+      XRAY_DOWNLOAD_URL="${GITHUB_MIRROR%/}/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"
+    else
+      XRAY_DOWNLOAD_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"
+    fi
+    
+    echo "Download URL: $XRAY_DOWNLOAD_URL"
+    
+    if curl -fsSL -o /tmp/xray.zip "$XRAY_DOWNLOAD_URL"; then
       unzip -q -o /tmp/xray.zip -d /tmp/nodehub-xray || true
       if [[ -f /tmp/nodehub-xray/xray ]]; then
         mkdir -p "$XRAY_ETC" "$XRAY_SHARE" "$XRAY_LOG"
@@ -127,7 +137,8 @@ if [[ -n "$XRAY_ARCH" ]]; then
         echo "Xray-core extraction failed."
       fi
     else
-      echo "Failed to download Xray-core, please check network or run manually."
+      echo "Failed to download Xray-core from: $XRAY_DOWNLOAD_URL"
+      echo "Please check network or run manually."
     fi
     rm -rf /tmp/xray.zip /tmp/nodehub-xray
   else
@@ -150,13 +161,29 @@ if [[ -n "$XRAY_ARCH" ]]; then
 
   if ! command -v sing-box >/dev/null 2>&1 && [[ ! -x "$SINGBOX_BIN" ]]; then
     echo "Downloading latest sing-box..."
-    SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
+    
+    # Get latest version with optional GitHub mirror
+    if [[ -n "$GITHUB_MIRROR" ]]; then
+      SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
+    else
+      SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
+    fi
+    
     SINGBOX_LATEST_TAG=$(echo "$SINGBOX_LATEST_URL" | grep -oE '[^/]+$')
     SINGBOX_VERSION=\${SINGBOX_LATEST_TAG#v}
     
     if [[ -n "$SINGBOX_VERSION" && "$SINGBOX_VERSION" != "latest" ]]; then
       SINGBOX_TAR="sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}.tar.gz"
-      SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
+      
+      # Construct download URL with optional GitHub mirror
+      if [[ -n "$GITHUB_MIRROR" ]]; then
+        SINGBOX_URL="${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
+      else
+        SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
+      fi
+      
+      echo "Download URL: $SINGBOX_URL"
+      
       if curl -fsSL -o /tmp/sing-box.tar.gz "$SINGBOX_URL"; then
         tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || true
         if [[ -f "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" ]]; then
@@ -172,7 +199,8 @@ if [[ -n "$XRAY_ARCH" ]]; then
           echo "sing-box extraction failed."
         fi
       else
-        echo "Failed to download sing-box (URL: $SINGBOX_URL), please check network."
+        echo "Failed to download sing-box from: $SINGBOX_URL"
+        echo "Please check network."
       fi
       rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}"
     else
@@ -213,7 +241,12 @@ cat > "$RUNNER_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -u
 
-MODE="\$1"
+if [[ \$# -lt 1 ]]; then
+  echo "Usage: \$0 {heartbeat|reconcile|cron_check}" >&2
+  exit 1
+fi
+
+MODE="\${1}"
 CONFIG_FILE="$CONFIG_FILE"
 
 if [[ ! -f "\$CONFIG_FILE" ]]; then
@@ -254,16 +287,16 @@ read_current_version() {
 }
 
 trim_text() {
-  printf '%s' "\$1" | tr '\\r\\n\\t' '   '
+  printf '%s' "\${1}" | tr '\\r\\n\\t' '   '
 }
 
 json_escape() {
-  printf '%s' "\$1" | tr '\\r\\n\\t' '   ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'
+  printf '%s' "\${1}" | tr '\\r\\n\\t' '   ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'
 }
 
 set_last_error() {
   local message
-  message="\$(trim_text "\$1")"
+  message="\$(trim_text "\${1}")"
   printf '%s' "\$message" > "\$ERROR_FILE"
 }
 
@@ -401,14 +434,14 @@ heartbeat_once() {
 }
 
 json_number_field() {
-  local key="\$1"
-  local payload="\$2"
+  local key="\${1}"
+  local payload="\${2}"
   echo "\$payload" | tr -d '\\r\\n' | grep -o "\\"\$key\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
 }
 
 json_bool_field() {
-  local key="\$1"
-  local payload="\$2"
+  local key="\${1}"
+  local payload="\${2}"
   if echo "\$payload" | tr -d '\\r\\n' | grep -q "\\"\$key\\":true"; then
     echo "true"
     return
@@ -429,9 +462,9 @@ generate_event_id() {
 }
 
 enqueue_apply_event() {
-  local status="\$1"
-  local version="\$2"
-  local message="\$3"
+  local status="\${1}"
+  local version="\${2}"
+  local message="\${3}"
   local now
   local event_id
   now="\$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -467,7 +500,7 @@ flush_pending_events() {
 }
 
 apply_target_version() {
-  local target_version="\$1"
+  local target_version="\${1}"
 
   if [[ -x "\$APPLY_HOOK" ]]; then
     if ! "\$APPLY_HOOK" "\$target_version"; then
@@ -540,7 +573,7 @@ reconcile_loop() {
 
 watchdog_check() {
   start_service() {
-    local sname="\$1"
+    local sname="\${1}"
     if ! kill -0 "\$(cat "\$STATE_DIR/\${sname}.pid" 2>/dev/null)" 2>/dev/null; then
        nohup bash "\$0" "\$sname" > "\$STATE_DIR/\${sname}.log" 2>&1 &
        echo \$! > "\$STATE_DIR/\${sname}.pid"
