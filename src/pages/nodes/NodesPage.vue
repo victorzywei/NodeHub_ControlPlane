@@ -22,6 +22,7 @@ const selected = ref<Set<string>>(new Set())
 const detailOpen = ref(false)
 const detailNode = ref<NodeRecord | null>(null)
 const detailInstallCommand = ref('')
+const detailUninstallCommand = ref('')
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
@@ -140,12 +141,17 @@ async function saveNode(): Promise<void> {
 async function openDetail(nodeId: string): Promise<void> {
   detailOpen.value = true
   detailInstallCommand.value = ''
+  detailUninstallCommand.value = ''
   try {
     const node = await getNode(nodeId)
     detailNode.value = node
     if (node.node_type === 'vps') {
       const install = await nodeInstallCommand(node.id)
       detailInstallCommand.value = install.command
+      
+      // Generate uninstall command
+      const baseUrl = window.location.origin
+      detailUninstallCommand.value = `URL='${baseUrl}/agent/uninstall'; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash`
     }
   } catch {
     toastStore.push('节点详情加载失败', 'danger')
@@ -267,9 +273,17 @@ onMounted(loadNodesData)
       <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
       <button class="btn btn-secondary" style="margin-top: 8px" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
       <template v-if="detailInstallCommand">
-        <div class="muted">VPS 安装命令</div>
-        <textarea class="textarea" readonly :value="detailInstallCommand" />
+        <div class="muted" style="margin-top: 16px; font-weight: 600">VPS 安装命令</div>
+        <textarea class="textarea" readonly :value="detailInstallCommand" style="min-height: 80px" />
         <button class="btn btn-secondary" @click="copyValue(detailInstallCommand, '安装命令')">复制安装命令</button>
+      </template>
+      <template v-if="detailUninstallCommand">
+        <div class="muted" style="margin-top: 16px; font-weight: 600">VPS 卸载命令</div>
+        <textarea class="textarea" readonly :value="detailUninstallCommand" style="min-height: 60px" />
+        <button class="btn btn-danger" @click="copyValue(detailUninstallCommand, '卸载命令')">复制卸载命令</button>
+        <div class="muted" style="margin-top: 8px; font-size: 12px">
+          可选参数：--remove-binaries (删除 xray/sing-box)，--remove-certs (删除证书)，--force (跳过确认)
+        </div>
       </template>
     </template>
     <div v-else class="muted">加载中...</div>
