@@ -4,15 +4,18 @@
 /**
  * Cloudflare Pages Function: Agent Installation Script
  * 
- * This function serves the static bash installation script from /public/agent-install.sh
- * The script is now maintained as a separate file to avoid JavaScript escaping issues.
+ * Serves the bash installation script from /agent-install.sh (static file)
+ * This keeps the bash script separate and maintainable.
  */
 
 export async function onRequestGet(context) {
   try {
-    // Fetch the static bash script from /public/agent-install.sh
-    const scriptUrl = new URL('/agent-install.sh', context.request.url);
-    const response = await context.env.ASSETS.fetch(scriptUrl);
+    // Construct URL to the static bash script
+    const origin = new URL(context.request.url).origin;
+    const scriptUrl = `${origin}/agent-install.sh`;
+    
+    // Fetch the static file
+    const response = await fetch(scriptUrl);
     
     if (!response.ok) {
       return new Response('Installation script not found', { status: 404 });
@@ -20,6 +23,7 @@ export async function onRequestGet(context) {
     
     const script = await response.text();
     
+    // Return with proper headers for bash script
     return new Response(script, {
       status: 200,
       headers: {
@@ -30,6 +34,6 @@ export async function onRequestGet(context) {
     });
   } catch (error) {
     console.error('Error serving installation script:', error);
-    return new Response('Internal server error', { status: 500 });
+    return new Response(`Error: ${error.message}`, { status: 500 });
   }
 }
