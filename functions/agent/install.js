@@ -1,3 +1,5 @@
+// @ts-nocheck
+/* eslint-disable */
 const script = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -112,7 +114,7 @@ if [[ -n "$XRAY_ARCH" ]]; then
     
     # Construct download URL with optional GitHub mirror
     if [[ -n "$GITHUB_MIRROR" ]]; then
-      XRAY_DOWNLOAD_URL="${GITHUB_MIRROR%/}/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"
+      XRAY_DOWNLOAD_URL="\${GITHUB_MIRROR%/}/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"
     else
       XRAY_DOWNLOAD_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"
     fi
@@ -164,7 +166,7 @@ if [[ -n "$XRAY_ARCH" ]]; then
     
     # Get latest version with optional GitHub mirror
     if [[ -n "$GITHUB_MIRROR" ]]; then
-      SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
+      SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "\${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
     else
       SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
     fi
@@ -177,7 +179,7 @@ if [[ -n "$XRAY_ARCH" ]]; then
       
       # Construct download URL with optional GitHub mirror
       if [[ -n "$GITHUB_MIRROR" ]]; then
-        SINGBOX_URL="${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
+        SINGBOX_URL="\${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
       else
         SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/\${SINGBOX_LATEST_TAG}/\${SINGBOX_TAR}"
       fi
