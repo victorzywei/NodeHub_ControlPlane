@@ -28,6 +28,8 @@ function normalizeNode(node) {
     desired_config: desiredConfig,
     desired_config_summary: String(node.desired_config_summary || ''),
     applied_config_summary: String(node.applied_config_summary || ''),
+    github_mirror: String(node.github_mirror || ''),
+    cf_api_token: String(node.cf_api_token || ''),
     online,
   }
 }
@@ -51,7 +53,7 @@ export async function onRequestPatch({ request, env, params }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))
-  const fields = ['name', 'region', 'tags', 'entry_cdn', 'entry_direct', 'entry_ip']
+  const fields = ['name', 'region', 'tags', 'entry_cdn', 'entry_direct', 'entry_ip', 'github_mirror', 'cf_api_token']
   fields.forEach((field) => {
     if (body[field] !== undefined) {
       node[field] = field === 'tags' ? body.tags : String(body[field])

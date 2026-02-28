@@ -29,6 +29,8 @@ function normalizeNode(node) {
     desired_config: desiredConfig,
     desired_config_summary: String(node.desired_config_summary || ''),
     applied_config_summary: String(node.applied_config_summary || ''),
+    github_mirror: String(node.github_mirror || ''),
+    cf_api_token: String(node.cf_api_token || ''),
     online,
   }
 }
@@ -72,6 +74,8 @@ export async function onRequestPost({ request, env }) {
     entry_cdn: String(body.entry_cdn || ''),
     entry_direct: String(body.entry_direct || ''),
     entry_ip: String(body.entry_ip || ''),
+    github_mirror: String(body.github_mirror || ''),
+    cf_api_token: String(body.cf_api_token || ''),
     token: createToken(),
     desired_version: 0,
     applied_version: 0,
