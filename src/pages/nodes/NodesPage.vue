@@ -34,6 +34,8 @@ const form = reactive({
   entry_cdn: '',
   entry_direct: '',
   entry_ip: '',
+  github_mirror: '',
+  cf_api_token: '',
 })
 
 const confirmBatchDelete = ref(false)
@@ -66,6 +68,8 @@ function toPayload(): Partial<NodeRecord> {
     entry_cdn: form.entry_cdn.trim(),
     entry_direct: form.entry_direct.trim(),
     entry_ip: form.entry_ip.trim(),
+    github_mirror: form.github_mirror.trim(),
+    cf_api_token: form.cf_api_token.trim(),
   }
 }
 
@@ -77,6 +81,8 @@ function fillForm(node?: NodeRecord): void {
   form.entry_cdn = node?.entry_cdn || ''
   form.entry_direct = node?.entry_direct || ''
   form.entry_ip = node?.entry_ip || ''
+  form.github_mirror = node?.github_mirror || ''
+  form.cf_api_token = node?.cf_api_token || ''
 }
 
 async function loadNodesData(): Promise<void> {
@@ -257,7 +263,9 @@ onMounted(loadNodesData)
       <div>CPU 使用率：{{ formatPercent(detailNode.cpu_usage_percent) }}</div>
       <div>内存占用：{{ formatMemorySummary(detailNode) }}</div>
       <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
-      <button class="btn btn-secondary" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
+      <div>GitHub 镜像：{{ detailNode.github_mirror || '-' }}</div>
+      <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
+      <button class="btn btn-secondary" style="margin-top: 8px" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
       <template v-if="detailInstallCommand">
         <div class="muted">VPS 安装命令</div>
         <textarea class="textarea" readonly :value="detailInstallCommand" />
@@ -298,6 +306,14 @@ onMounted(loadNodesData)
     <label>
       入口 IP
       <input v-model="form.entry_ip" class="input" />
+    </label>
+    <label>
+      GitHub 镜像 (可选)
+      <input v-model="form.github_mirror" class="input" placeholder="用于vps下载github的文件" />
+    </label>
+    <label>
+      Cloudflare API Token (可选)
+      <input v-model="form.cf_api_token" class="input" placeholder="用于申请CF证书" />
     </label>
     <button class="btn btn-primary" @click="saveNode">保存</button>
   </DetailDrawer>

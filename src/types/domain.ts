@@ -26,6 +26,8 @@ export interface NodeRecord {
   entry_cdn: string
   entry_direct: string
   entry_ip: string
+  github_mirror?: string
+  cf_api_token?: string
   token: string
   online: boolean
   desired_version: number
