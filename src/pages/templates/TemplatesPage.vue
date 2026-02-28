@@ -211,6 +211,22 @@ async function saveTemplate(): Promise<void> {
       return
     }
 
+    for (const field of presetParamFields.value) {
+      const val = defaults[field.key]
+      if (val === undefined || val === '') {
+        toastStore.push(`参数 ${field.label || field.key} 尚未配置或为空`, 'warning')
+        return
+      }
+
+      if (field.key === 'port') {
+        const portNum = Number(val)
+        if (!Number.isInteger(portNum) || portNum < 0 || portNum > 65536) {
+          toastStore.push(`端口必须为 0 - 65536 的整数`, 'warning')
+          return
+        }
+      }
+    }
+
     if (editorMode.value === 'create') {
       await createTemplate({
         name: form.name.trim(),
@@ -372,7 +388,10 @@ onMounted(loadData)
             v-model="defaultsForm[field.key]"
             class="input"
             style="flex: 1"
-            :type="field.type === 'number' ? 'number' : field.type === 'password' ? 'password' : 'text'"
+            :type="field.type === 'number' ? 'number' : 'text'"
+            :min="field.key === 'port' ? 0 : undefined"
+            :max="field.key === 'port' ? 65536 : undefined"
+            :step="field.key === 'port' ? 1 : undefined"
             :placeholder="field.placeholder || ''"
           />
 

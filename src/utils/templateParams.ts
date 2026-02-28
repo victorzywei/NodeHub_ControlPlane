@@ -23,12 +23,8 @@ const PRESET_FIELDS: Record<string, TemplateParamField[]> = {
     {
       key: 'port',
       label: 'Port',
-      type: 'select',
+      type: 'number',
       valueType: 'number',
-      options: [
-        { value: '49443', label: '49443 (recommended)' },
-        { value: '443', label: '443' },
-      ],
       defaultValue: 49443,
     },
     {
@@ -69,12 +65,8 @@ const PRESET_FIELDS: Record<string, TemplateParamField[]> = {
     {
       key: 'port',
       label: 'Port',
-      type: 'select',
+      type: 'number',
       valueType: 'number',
-      options: [
-        { value: '49444', label: '49444 (recommended)' },
-        { value: '443', label: '443' },
-      ],
       defaultValue: 49444,
     },
     {
@@ -108,12 +100,8 @@ const PRESET_FIELDS: Record<string, TemplateParamField[]> = {
     {
       key: 'port',
       label: 'Port',
-      type: 'select',
+      type: 'number',
       valueType: 'number',
-      options: [
-        { value: '49445', label: '49445 (recommended)' },
-        { value: '443', label: '443' },
-      ],
       defaultValue: 49445,
     },
     {
@@ -140,12 +128,8 @@ const PRESET_FIELDS: Record<string, TemplateParamField[]> = {
     {
       key: 'port',
       label: 'Port',
-      type: 'select',
+      type: 'number',
       valueType: 'number',
-      options: [
-        { value: '2053', label: '2053 (recommended)' },
-        { value: '443', label: '443' },
-      ],
       defaultValue: 2053,
     },
     {
@@ -167,12 +151,8 @@ const PRESET_FIELDS: Record<string, TemplateParamField[]> = {
     {
       key: 'port',
       label: 'Port',
-      type: 'select',
+      type: 'number',
       valueType: 'number',
-      options: [
-        { value: '2087', label: '2087 (recommended)' },
-        { value: '443', label: '443' },
-      ],
       defaultValue: 2087,
     },
     {
