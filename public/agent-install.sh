@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+############################################
+# NodeHub Agent Bootstrap (portable version)
+# - system mode (root) or user mode fallback
+# - install xray + sing-box (official releases)
+# - install agent runner + systemd services (or cron watchdog)
+# - optional acme.sh issue certs (standalone or CF DNS)
+############################################
+
+# ---------- Defaults ----------
 API_BASE=""
 NODE_ID=""
 NODE_TOKEN=""
@@ -14,214 +23,308 @@ STATE_DIR="/var/lib/nodehub-agent"
 AGENT_ROOT="/usr/local/lib/nodehub-agent"
 CONFIG_ROOT="/etc/nodehub-agent"
 
+# ---------- Helpers ----------
+log()  { printf '%s\n' "[INFO] $*"; }
+warn() { printf '%s\n' "[WARN] $*" >&2; }
+die()  { printf '%s\n' "[ERR ] $*" >&2; exit 1; }
+
+need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+is_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]]; }
+
+mktempdir() {
+  local d
+  d="$(mktemp -d 2>/dev/null || mktemp -d -t nodehub)"
+  echo "$d"
+}
+
+cleanup_dir=""
+cleanup() {
+  [[ -n "${cleanup_dir:-}" && -d "$cleanup_dir" ]] && rm -rf "$cleanup_dir" || true
+}
+trap cleanup EXIT
+
+# Portable sed -i (GNU/BSD/BusyBox)
+sedi() {
+  # usage: sedi 's/a/b/g' file
+  local expr="$1" file="$2"
+  if sed --version >/dev/null 2>&1; then
+    # GNU sed
+    sed -i "$expr" "$file"
+  else
+    # BSD sed (macOS) / some busybox variants support -i ''
+    sed -i '' "$expr" "$file" 2>/dev/null || {
+      # last resort: temp file rewrite
+      local tmp
+      tmp="$(mktemp 2>/dev/null || mktemp -t sedi)"
+      sed "$expr" "$file" > "$tmp"
+      cat "$tmp" > "$file"
+      rm -f "$tmp"
+    }
+  fi
+}
+
+# URL join for optional mirror that expects: MIRROR/https://github.com/...
+wrap_url() {
+  local url="$1"
+  if [[ -n "$GITHUB_MIRROR" ]]; then
+    printf '%s/%s' "${GITHUB_MIRROR%/}" "$url"
+  else
+    printf '%s' "$url"
+  fi
+}
+
+# Install packages if possible (best-effort)
+install_pkgs() {
+  # $@ = packages
+  local pkgs=("$@")
+  if is_root; then
+    if need_cmd apt-get; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    if need_cmd dnf; then
+      dnf install -y "${pkgs[@]}" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    if need_cmd yum; then
+      yum install -y "${pkgs[@]}" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    if need_cmd zypper; then
+      zypper --non-interactive install -y "${pkgs[@]}" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    if need_cmd pacman; then
+      pacman -Sy --noconfirm "${pkgs[@]}" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+    if need_cmd apk; then
+      apk add --no-cache "${pkgs[@]}" >/dev/null 2>&1 || return 1
+      return 0
+    fi
+  fi
+  return 1
+}
+
+require_or_install() {
+  # $1=cmd, rest=pkgs
+  local cmd="$1"; shift
+  if need_cmd "$cmd"; then return 0; fi
+  warn "Missing command: $cmd"
+  if [[ $# -gt 0 ]]; then
+    if install_pkgs "$@"; then
+      log "Installed dependency via package manager: $*"
+      need_cmd "$cmd" && return 0
+    fi
+  fi
+  return 1
+}
+
+# ---------- Arg parsing ----------
+usage() {
+  cat <<EOF
+Usage:
+  $0 --api-base <URL> --node-id <ID> --node-token <TOKEN> [options]
+
+Options:
+  --tls-domain <domain>
+  --tls-domain-alt <domain>
+  --github-mirror <mirror_prefix>   e.g. https://ghproxy.com
+  --cf-api-token <token>           Cloudflare API token for DNS validation
+  --heartbeat-interval <seconds>   default: 600
+  --reconcile-interval <seconds>   default: 15
+  --state-dir <dir>                default: /var/lib/nodehub-agent
+  --agent-root <dir>               default: /usr/local/lib/nodehub-agent
+  --config-root <dir>              default: /etc/nodehub-agent
+EOF
+}
+
+need_value() {
+  local opt="$1" val="${2:-}"
+  [[ -n "$val" ]] || die "Option '$opt' requires a value"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --api-base) API_BASE="$2"; shift 2 ;;
-    --node-id) NODE_ID="$2"; shift 2 ;;
-    --node-token) NODE_TOKEN="$2"; shift 2 ;;
-    --tls-domain) TLS_DOMAIN="$2"; shift 2 ;;
-    --tls-domain-alt) TLS_DOMAIN_ALT="$2"; shift 2 ;;
-    --github-mirror) GITHUB_MIRROR="$2"; shift 2 ;;
-    --cf-api-token) CF_API_TOKEN="$2"; shift 2 ;;
-    --heartbeat-interval) HEARTBEAT_INTERVAL="$2"; shift 2 ;;
-    --reconcile-interval) RECONCILE_INTERVAL="$2"; shift 2 ;;
-    --state-dir) STATE_DIR="$2"; shift 2 ;;
-    --agent-root) AGENT_ROOT="$2"; shift 2 ;;
-    --config-root) CONFIG_ROOT="$2"; shift 2 ;;
-    *) echo "Unknown option: $1" >&2; exit 1 ;;
+    --api-base)         need_value "$1" "${2:-}"; API_BASE="$2"; shift 2 ;;
+    --node-id)          need_value "$1" "${2:-}"; NODE_ID="$2"; shift 2 ;;
+    --node-token)       need_value "$1" "${2:-}"; NODE_TOKEN="$2"; shift 2 ;;
+    --tls-domain)       need_value "$1" "${2:-}"; TLS_DOMAIN="$2"; shift 2 ;;
+    --tls-domain-alt)   need_value "$1" "${2:-}"; TLS_DOMAIN_ALT="$2"; shift 2 ;;
+    --github-mirror)    need_value "$1" "${2:-}"; GITHUB_MIRROR="$2"; shift 2 ;;
+    --cf-api-token)     need_value "$1" "${2:-}"; CF_API_TOKEN="$2"; shift 2 ;;
+    --heartbeat-interval) need_value "$1" "${2:-}"; HEARTBEAT_INTERVAL="$2"; shift 2 ;;
+    --reconcile-interval) need_value "$1" "${2:-}"; RECONCILE_INTERVAL="$2"; shift 2 ;;
+    --state-dir)        need_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
+    --agent-root)       need_value "$1" "${2:-}"; AGENT_ROOT="$2"; shift 2 ;;
+    --config-root)      need_value "$1" "${2:-}"; CONFIG_ROOT="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown option: $1 (use --help)" ;;
   esac
 done
 
-if [[ -z "$API_BASE" || -z "$NODE_ID" || -z "$NODE_TOKEN" ]]; then
-  echo "Missing required args: --api-base --node-id --node-token" >&2
-  exit 1
-fi
+[[ -n "$API_BASE" && -n "$NODE_ID" && -n "$NODE_TOKEN" ]] || {
+  usage
+  die "Missing required args: --api-base --node-id --node-token"
+}
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "curl is required" >&2
-  exit 1
-fi
+# ---------- Basic deps ----------
+require_or_install curl curl ca-certificates || die "curl is required (install it and retry)."
+# unzip/tar are needed for xray/sing-box extraction; try best-effort
+require_or_install tar tar || warn "tar not found; sing-box extraction may fail unless already installed."
+require_or_install unzip unzip || warn "unzip not found; xray extraction may fail unless already installed."
 
-# Try to create system directories first
+# ---------- Install mode / directories ----------
 INSTALL_MODE="system"
-if ! mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" 2>/dev/null; then
-  echo "================================================"
-  echo "No permission for system directories."
-  echo "Switching to user-mode installation..."
-  echo "================================================"
-  
-  # Switch to user directories
-  STATE_DIR="$HOME/.local/share/nodehub-agent"
-  AGENT_ROOT="$HOME/.local/lib/nodehub-agent"
-  CONFIG_ROOT="$HOME/.config/nodehub-agent"
+if mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" >/dev/null 2>&1; then
+  INSTALL_MODE="system"
+else
+  warn "No permission for system directories; switching to user-mode install."
   INSTALL_MODE="user"
-  
-  # Create user directories
-  mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
+  STATE_DIR="${HOME}/.local/share/nodehub-agent"
+  AGENT_ROOT="${HOME}/.local/lib/nodehub-agent"
+  CONFIG_ROOT="${HOME}/.config/nodehub-agent"
+  mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" || die "Failed to create user directories."
 fi
 
 chmod 700 "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" 2>/dev/null || true
 
-echo "Installing official Xray and Sing-box binaries..."
-ARCH="$(uname -m)"
+# Ensure user bin in PATH for current session if user-mode
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  mkdir -p "${HOME}/.local/bin"
+  export PATH="${HOME}/.local/bin:${PATH}"
+fi
+
+# ---------- Arch mapping ----------
+ARCH="$(uname -m || true)"
+XRAY_ARCH=""
+SINGBOX_ARCH=""
 case "$ARCH" in
-  x86_64|amd64)
-    XRAY_ARCH="64"
-    SINGBOX_ARCH="amd64"
-    ;;
-  aarch64|arm64)
-    XRAY_ARCH="arm64-v8a"
-    SINGBOX_ARCH="arm64"
-    ;;
+  x86_64|amd64) XRAY_ARCH="64"; SINGBOX_ARCH="amd64" ;;
+  aarch64|arm64) XRAY_ARCH="arm64-v8a"; SINGBOX_ARCH="arm64" ;;
+  armv7l|armv7) XRAY_ARCH="arm32-v7a"; SINGBOX_ARCH="armv7" ;;
+  i386|i686) XRAY_ARCH="32"; SINGBOX_ARCH="386" ;;
   *)
-    echo "Warning: Unsupported CPU architecture for pre-compiled binaries: $ARCH. You may need to install Xray/Sing-box manually."
+    warn "Unsupported architecture for prebuilt install: $ARCH"
     XRAY_ARCH=""
+    SINGBOX_ARCH=""
     ;;
 esac
 
-if [[ -n "$XRAY_ARCH" ]]; then
-  if ! command -v unzip >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-    if [[ "$INSTALL_MODE" == "system" ]]; then
-      echo "Attempting to install unzip and tar to extract binaries..."
-      if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y unzip tar >/dev/null; fi
-      if command -v dnf >/dev/null 2>&1; then dnf install -y unzip tar >/dev/null; fi
-      if command -v yum >/dev/null 2>&1; then yum install -y unzip tar >/dev/null; fi
-    else
-      echo "Warning: unzip and tar are required but cannot be installed in user mode."
-      echo "Please install them manually: apt-get install unzip tar (or equivalent)"
-    fi
-  fi
-  
-  # Determine xray installation paths
-  if [[ "$INSTALL_MODE" == "user" ]]; then
-    XRAY_BIN="$HOME/.local/bin/xray"
-    XRAY_ETC="$HOME/.config/xray"
-    XRAY_SHARE="$HOME/.local/share/xray"
-    XRAY_LOG="$HOME/.local/share/xray/logs"
-    mkdir -p "$HOME/.local/bin"
-  else
-    XRAY_BIN="/usr/local/bin/xray"
-    XRAY_ETC="/usr/local/etc/xray"
-    XRAY_SHARE="/usr/local/share/xray"
-    XRAY_LOG="/var/log/xray"
-  fi
-
-  if ! command -v xray >/dev/null 2>&1 && [[ ! -x "$XRAY_BIN" ]]; then
-    echo "Downloading latest Xray-core..."
-    mkdir -p /tmp/nodehub-xray
-    
-    # Construct download URL with optional GitHub mirror
-    if [[ -n "$GITHUB_MIRROR" ]]; then
-      XRAY_DOWNLOAD_URL="${GITHUB_MIRROR%/}/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${XRAY_ARCH}.zip"
-    else
-      XRAY_DOWNLOAD_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${XRAY_ARCH}.zip"
-    fi
-    
-    echo "Download URL: $XRAY_DOWNLOAD_URL"
-    
-    if curl -fsSL -o /tmp/xray.zip "$XRAY_DOWNLOAD_URL"; then
-      unzip -q -o /tmp/xray.zip -d /tmp/nodehub-xray || true
-      if [[ -f /tmp/nodehub-xray/xray ]]; then
-        mkdir -p "$XRAY_ETC" "$XRAY_SHARE" "$XRAY_LOG"
-        chmod 755 "$XRAY_ETC" "$XRAY_SHARE" "$XRAY_LOG" 2>/dev/null || true
-        mv /tmp/nodehub-xray/xray "$XRAY_BIN"
-        chmod 755 "$XRAY_BIN"
-        mv /tmp/nodehub-xray/geoip.dat "$XRAY_SHARE/geoip.dat" 2>/dev/null || true
-        mv /tmp/nodehub-xray/geosite.dat "$XRAY_SHARE/geosite.dat" 2>/dev/null || true
-        chmod 644 "$XRAY_SHARE/geoip.dat" "$XRAY_SHARE/geosite.dat" 2>/dev/null || true
-        echo "Xray-core installed to $XRAY_BIN"
-        if [[ "$INSTALL_MODE" == "user" ]]; then
-          echo "Note: Add $HOME/.local/bin to your PATH if not already present"
-        fi
-      else
-        echo "Xray-core extraction failed."
-      fi
-    else
-      echo "Failed to download Xray-core from: $XRAY_DOWNLOAD_URL"
-      echo "Please check network or run manually."
-    fi
-    rm -rf /tmp/xray.zip /tmp/nodehub-xray
-  else
-    echo "Xray-core is already installed."
-  fi
-
-  # Determine sing-box installation paths
-  if [[ "$INSTALL_MODE" == "user" ]]; then
-    SINGBOX_BIN="$HOME/.local/bin/sing-box"
-    SINGBOX_ETC="$HOME/.config/sing-box"
-    SINGBOX_LIB="$HOME/.local/share/sing-box"
-    SINGBOX_LOG="$HOME/.local/share/sing-box/logs"
-    mkdir -p "$HOME/.local/bin"
-  else
-    SINGBOX_BIN="/usr/local/bin/sing-box"
-    SINGBOX_ETC="/etc/sing-box"
-    SINGBOX_LIB="/var/lib/sing-box"
-    SINGBOX_LOG="/var/log/sing-box"
-  fi
-
-  if ! command -v sing-box >/dev/null 2>&1 && [[ ! -x "$SINGBOX_BIN" ]]; then
-    echo "Downloading latest sing-box..."
-    
-    # Get latest version with optional GitHub mirror
-    if [[ -n "$GITHUB_MIRROR" ]]; then
-      SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
-    else
-      SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
-    fi
-    
-    SINGBOX_LATEST_TAG=$(echo "$SINGBOX_LATEST_URL" | grep -oE '[^/]+$')
-    SINGBOX_VERSION=${SINGBOX_LATEST_TAG#v}
-    
-    if [[ -n "$SINGBOX_VERSION" && "$SINGBOX_VERSION" != "latest" ]]; then
-      SINGBOX_TAR="sing-box-${SINGBOX_VERSION}-linux-${SINGBOX_ARCH}.tar.gz"
-      
-      # Construct download URL with optional GitHub mirror
-      if [[ -n "$GITHUB_MIRROR" ]]; then
-        SINGBOX_URL="${GITHUB_MIRROR%/}/https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_LATEST_TAG}/${SINGBOX_TAR}"
-      else
-        SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_LATEST_TAG}/${SINGBOX_TAR}"
-      fi
-      
-      echo "Download URL: $SINGBOX_URL"
-      
-      if curl -fsSL -o /tmp/sing-box.tar.gz "$SINGBOX_URL"; then
-        tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || true
-        if [[ -f "/tmp/sing-box-${SINGBOX_VERSION}-linux-${SINGBOX_ARCH}/sing-box" ]]; then
-          mkdir -p "$SINGBOX_ETC" "$SINGBOX_LIB" "$SINGBOX_LOG"
-          chmod 755 "$SINGBOX_ETC" "$SINGBOX_LIB" "$SINGBOX_LOG" 2>/dev/null || true
-          mv "/tmp/sing-box-${SINGBOX_VERSION}-linux-${SINGBOX_ARCH}/sing-box" "$SINGBOX_BIN"
-          chmod 755 "$SINGBOX_BIN"
-          echo "sing-box installed to $SINGBOX_BIN"
-          if [[ "$INSTALL_MODE" == "user" ]]; then
-            echo "Note: Add $HOME/.local/bin to your PATH if not already present"
-          fi
-        else
-          echo "sing-box extraction failed."
-        fi
-      else
-        echo "Failed to download sing-box from: $SINGBOX_URL"
-        echo "Please check network."
-      fi
-      rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${SINGBOX_VERSION}-linux-${SINGBOX_ARCH}"
-    else
-      echo "Failed to detect sing-box latest version."
-    fi
-  else
-    echo "sing-box is already installed."
-  fi
-fi
-
-CONFIG_FILE="$CONFIG_ROOT/config.env"
-RUNNER_SCRIPT="$AGENT_ROOT/agent-runner.sh"
-
+# ---------- Binary paths ----------
 if [[ "$INSTALL_MODE" == "user" ]]; then
-  HEARTBEAT_SERVICE="$HOME/.config/systemd/user/nodehub-heartbeat.service"
-  RECONCILE_SERVICE="$HOME/.config/systemd/user/nodehub-reconcile.service"
-  mkdir -p "$HOME/.config/systemd/user"
+  XRAY_BIN="${HOME}/.local/bin/xray"
+  XRAY_ETC="${HOME}/.config/xray"
+  XRAY_SHARE="${HOME}/.local/share/xray"
+  XRAY_LOG="${HOME}/.local/share/xray/logs"
+
+  SINGBOX_BIN="${HOME}/.local/bin/sing-box"
+  SINGBOX_ETC="${HOME}/.config/sing-box"
+  SINGBOX_LIB="${HOME}/.local/share/sing-box"
+  SINGBOX_LOG="${HOME}/.local/share/sing-box/logs"
 else
-  HEARTBEAT_SERVICE="/etc/systemd/system/nodehub-heartbeat.service"
-  RECONCILE_SERVICE="/etc/systemd/system/nodehub-reconcile.service"
+  XRAY_BIN="/usr/local/bin/xray"
+  XRAY_ETC="/usr/local/etc/xray"
+  XRAY_SHARE="/usr/local/share/xray"
+  XRAY_LOG="/var/log/xray"
+
+  SINGBOX_BIN="/usr/local/bin/sing-box"
+  SINGBOX_ETC="/etc/sing-box"
+  SINGBOX_LIB="/var/lib/sing-box"
+  SINGBOX_LOG="/var/log/sing-box"
 fi
+
+mkdir -p "$XRAY_ETC" "$XRAY_SHARE" "$XRAY_LOG" 2>/dev/null || true
+mkdir -p "$SINGBOX_ETC" "$SINGBOX_LIB" "$SINGBOX_LOG" 2>/dev/null || true
+
+# ---------- Install Xray ----------
+install_xray() {
+  [[ -n "$XRAY_ARCH" ]] || { warn "Skip Xray install (unsupported arch)."; return 0; }
+  if need_cmd xray || [[ -x "$XRAY_BIN" ]]; then
+    log "Xray already installed."
+    return 0
+  fi
+  require_or_install unzip unzip || die "unzip is required to install Xray."
+
+  cleanup_dir="$(mktempdir)"
+  local zip="${cleanup_dir}/xray.zip"
+  local url
+  url="$(wrap_url "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${XRAY_ARCH}.zip")"
+
+  log "Downloading Xray: $url"
+  curl -fsSL -o "$zip" "$url" || die "Failed to download Xray from: $url"
+
+  unzip -q -o "$zip" -d "$cleanup_dir" || die "Failed to unzip Xray package."
+  [[ -f "${cleanup_dir}/xray" ]] || die "Xray binary not found after extraction."
+
+  mkdir -p "$(dirname "$XRAY_BIN")" || true
+  mv "${cleanup_dir}/xray" "$XRAY_BIN"
+  chmod 755 "$XRAY_BIN"
+
+  [[ -f "${cleanup_dir}/geoip.dat" ]] && mv "${cleanup_dir}/geoip.dat" "$XRAY_SHARE/geoip.dat" || true
+  [[ -f "${cleanup_dir}/geosite.dat" ]] && mv "${cleanup_dir}/geosite.dat" "$XRAY_SHARE/geosite.dat" || true
+  chmod 644 "$XRAY_SHARE/geoip.dat" "$XRAY_SHARE/geosite.dat" 2>/dev/null || true
+
+  log "Xray installed to: $XRAY_BIN"
+}
+
+# ---------- Install sing-box ----------
+# Use GitHub API to get latest tag; parse without jq.
+get_latest_github_tag() {
+  # $1=owner/repo
+  local repo="$1"
+  local api
+  api="$(wrap_url "https://api.github.com/repos/${repo}/releases/latest")"
+  curl -fsSL "$api" | tr -d '\r\n' | sed 's/"/\n"/g' | awk -F: '/"tag_name"/{gsub(/[", ]/,"",$2); print $2; exit}'
+}
+
+install_singbox() {
+  [[ -n "$SINGBOX_ARCH" ]] || { warn "Skip sing-box install (unsupported arch)."; return 0; }
+  if need_cmd sing-box || [[ -x "$SINGBOX_BIN" ]]; then
+    log "sing-box already installed."
+    return 0
+  fi
+  require_or_install tar tar || die "tar is required to install sing-box."
+
+  local tag
+  tag="$(get_latest_github_tag "SagerNet/sing-box" || true)"
+  [[ -n "$tag" && "$tag" != "latest" ]] || die "Failed to detect sing-box latest release tag."
+
+  local ver="${tag#v}"
+  local tarname="sing-box-${ver}-linux-${SINGBOX_ARCH}.tar.gz"
+  local url
+  url="$(wrap_url "https://github.com/SagerNet/sing-box/releases/download/${tag}/${tarname}")"
+
+  cleanup_dir="$(mktempdir)"
+  local tgz="${cleanup_dir}/sing-box.tar.gz"
+
+  log "Downloading sing-box: $url"
+  curl -fsSL -o "$tgz" "$url" || die "Failed to download sing-box from: $url"
+
+  tar -xzf "$tgz" -C "$cleanup_dir" || die "Failed to extract sing-box tarball."
+  local extracted="${cleanup_dir}/sing-box-${ver}-linux-${SINGBOX_ARCH}/sing-box"
+  [[ -f "$extracted" ]] || die "sing-box binary not found after extraction."
+
+  mkdir -p "$(dirname "$SINGBOX_BIN")" || true
+  mv "$extracted" "$SINGBOX_BIN"
+  chmod 755 "$SINGBOX_BIN"
+
+  log "sing-box installed to: $SINGBOX_BIN"
+}
+
+log "Installing official Xray and sing-box binaries (best-effort)..."
+install_xray || true
+install_singbox || true
+
+# ---------- Write config + runner ----------
+CONFIG_FILE="${CONFIG_ROOT}/config.env"
+RUNNER_SCRIPT="${AGENT_ROOT}/agent-runner.sh"
+HOOK_DIR="${AGENT_ROOT}/hooks"
+APPLY_HOOK="${HOOK_DIR}/apply.sh"
+
+mkdir -p "$HOOK_DIR" || true
 
 cat > "$CONFIG_FILE" <<EOF
 API_BASE="$API_BASE"
@@ -235,125 +338,72 @@ HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
 RECONCILE_INTERVAL="$RECONCILE_INTERVAL"
 STATE_DIR="$STATE_DIR"
 AGENT_ROOT="$AGENT_ROOT"
+CONFIG_ROOT="$CONFIG_ROOT"
 EOF
-chmod 600 "$CONFIG_FILE"
+chmod 600 "$CONFIG_FILE" || true
 
+# Runner: minimal external deps (curl/awk/grep/sed)
 cat > "$RUNNER_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
-if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 {heartbeat|reconcile|cron_check}" >&2
-  exit 1
-fi
+MODE="${1:-}"
+[[ -n "$MODE" ]] || { echo "Usage: $0 {heartbeat|reconcile|cron_check}" >&2; exit 1; }
 
-MODE="${1}"
 CONFIG_FILE="__NODEHUB_CONFIG_FILE__"
+[[ -f "$CONFIG_FILE" ]] || { echo "config file missing: $CONFIG_FILE" >&2; exit 1; }
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "config file missing: $CONFIG_FILE" >&2
-  exit 1
-fi
-
-# shellcheck source=$CONFIG_FILE
+# shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
 EVENTS_FILE="$STATE_DIR/pending-events.jsonl"
 VERSION_FILE="$STATE_DIR/current-version"
-APPLY_HOOK_DIR="${AGENT_ROOT:-$(dirname "$STATE_DIR")/../lib/nodehub-agent}/hooks"
-APPLY_HOOK="$APPLY_HOOK_DIR/apply.sh"
 ERROR_FILE="$STATE_DIR/last-error.log"
+APPLY_HOOK="${AGENT_ROOT}/hooks/apply.sh"
 
 mkdir -p "$STATE_DIR"
-touch "$EVENTS_FILE"
-touch "$ERROR_FILE"
-if [[ ! -f "$VERSION_FILE" ]]; then
-  echo "0" > "$VERSION_FILE"
-fi
+touch "$EVENTS_FILE" "$ERROR_FILE"
+[[ -f "$VERSION_FILE" ]] || echo "0" > "$VERSION_FILE"
 
-read_current_version() {
-  if [[ ! -f "$VERSION_FILE" ]]; then
-    echo "0"
-    return
-  fi
-
-  local raw
-  raw="$(tr -d '\\r\\n' < "$VERSION_FILE")"
-  if [[ "$raw" =~ ^[0-9]+$ ]]; then
-    echo "$raw"
-    return
-  fi
-
-  echo "0"
-}
-
-trim_text() {
-  printf '%s' "${1}" | tr '\\r\\n\\t' '   '
-}
+trim_text() { printf '%s' "${1:-}" | tr '\r\n\t' '   '; }
 
 json_escape() {
-  printf '%s' "${1}" | tr '\\r\\n\\t' '   ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'
+  # escape backslash + quote; normalize whitespace
+  printf '%s' "${1:-}" | tr '\r\n\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-set_last_error() {
-  local message
-  message="$(trim_text "${1}")"
-  printf '%s' "$message" > "$ERROR_FILE"
-}
+set_last_error() { printf '%s' "$(trim_text "${1:-}")" > "$ERROR_FILE"; }
+clear_last_error() { : > "$ERROR_FILE"; }
+read_last_error() { [[ -f "$ERROR_FILE" ]] && trim_text "$(cat "$ERROR_FILE" 2>/dev/null || true)" || echo ""; }
 
-clear_last_error() {
-  : > "$ERROR_FILE"
-}
-
-read_last_error() {
-  if [[ ! -f "$ERROR_FILE" ]]; then
-    echo ""
-    return
-  fi
-
-  local message
-  message="$(cat "$ERROR_FILE" 2>/dev/null || true)"
-  trim_text "$message"
+read_current_version() {
+  local raw
+  raw="$(tr -d '\r\n' < "$VERSION_FILE" 2>/dev/null || echo "0")"
+  [[ "$raw" =~ ^[0-9]+$ ]] && echo "$raw" || echo "0"
 }
 
 detect_protocol_app_version() {
   local cmd_timeout=""
-  if command -v timeout >/dev/null 2>&1; then
-    cmd_timeout="timeout 5"
-  fi
+  command -v timeout >/dev/null 2>&1 && cmd_timeout="timeout 5"
 
   if command -v xray >/dev/null 2>&1; then
-    $cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
+    $cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\r\n' || true
     return
   fi
-
   if command -v sing-box >/dev/null 2>&1; then
-    $cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
+    $cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\r\n' || true
     return
   fi
-
   echo ""
 }
 
 cpu_usage_percent() {
-  if [[ ! -r /proc/stat ]]; then
-    echo "null"
-    return
-  fi
-
+  [[ -r /proc/stat ]] || { echo "null"; return; }
   local user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1
   local user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2
-  read -r _ user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1 _ < /proc/stat || {
-    echo "null"
-    return
-  }
-
+  read -r _ user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1 _ < /proc/stat || { echo "null"; return; }
   sleep 0.2
-
-  read -r _ user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2 _ < /proc/stat || {
-    echo "null"
-    return
-  }
+  read -r _ user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2 _ < /proc/stat || { echo "null"; return; }
 
   local total1 total2 idle_total1 idle_total2 total_delta idle_delta usage_x100
   total1=$((user1 + nice1 + system1 + idle1 + iowait1 + irq1 + softirq1 + steal1))
@@ -362,147 +412,102 @@ cpu_usage_percent() {
   idle_total2=$((idle2 + iowait2))
   total_delta=$((total2 - total1))
   idle_delta=$((idle_total2 - idle_total1))
-
-  if [[ "$total_delta" -le 0 ]]; then
-    echo "null"
-    return
-  fi
+  [[ "$total_delta" -gt 0 ]] || { echo "null"; return; }
 
   usage_x100=$(( (10000 * (total_delta - idle_delta)) / total_delta ))
-  awk "BEGIN { printf \\"%.2f\\", $usage_x100 / 100 }"
+  awk "BEGIN { printf \"%.2f\", $usage_x100 / 100 }"
 }
 
 memory_stats() {
-  if [[ ! -r /proc/meminfo ]]; then
-    echo "null null null"
-    return
-  fi
-
+  [[ -r /proc/meminfo ]] || { echo "null null null"; return; }
   local total_kb available_kb used_kb used_mb total_mb usage_x100 usage_percent
-  total_kb="$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)"
-  available_kb="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
-
-  if [[ -z "$total_kb" || -z "$available_kb" || "$total_kb" -le 0 ]]; then
-    echo "null null null"
-    return
-  fi
-
-  used_kb=$((total_kb - available_kb))
-  if [[ "$used_kb" -lt 0 ]]; then
-    used_kb=0
-  fi
-
-  used_mb=$((used_kb / 1024))
-  total_mb=$((total_kb / 1024))
+  total_kb="$(awk '/MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null || echo "")"
+  available_kb="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null || echo "")"
+  [[ -n "$total_kb" && -n "$available_kb" && "$total_kb" -gt 0 ]] || { echo "null null null"; return; }
+  used_kb=$((total_kb - available_kb)); [[ "$used_kb" -lt 0 ]] && used_kb=0
+  used_mb=$((used_kb / 1024)); total_mb=$((total_kb / 1024))
   usage_x100=$(( (10000 * used_kb) / total_kb ))
-  usage_percent="$(awk "BEGIN { printf \\"%.2f\\", $usage_x100 / 100 }")"
-
+  usage_percent="$(awk "BEGIN { printf \"%.2f\", $usage_x100 / 100 }")"
   echo "$used_mb $total_mb $usage_percent"
 }
 
 build_heartbeat_payload() {
   local current_version deploy_info protocol_version error_message cpu_usage
   local memory_used memory_total memory_usage
-  local deploy_json protocol_json error_json
-
   current_version="$(read_current_version)"
-  deploy_info="applied_version=v$current_version"
+  deploy_info="applied_version=v${current_version}"
   protocol_version="$(detect_protocol_app_version)"
   error_message="$(read_last_error)"
   cpu_usage="$(cpu_usage_percent)"
   read -r memory_used memory_total memory_usage <<< "$(memory_stats)"
 
+  local deploy_json protocol_json error_json
   deploy_json="$(json_escape "$deploy_info")"
   protocol_json="$(json_escape "$protocol_version")"
   error_json="$(json_escape "$error_message")"
 
-  echo "{\\"node_id\\":\\"$NODE_ID\\",\\"deploy_info\\":\\"$deploy_json\\",\\"protocol_app_version\\":\\"$protocol_json\\",\\"error_message\\":\\"$error_json\\",\\"cpu_usage_percent\\":$cpu_usage,\\"memory_used_mb\\":$memory_used,\\"memory_total_mb\\":$memory_total,\\"memory_usage_percent\\":$memory_usage}"
+  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage}"
 }
 
 heartbeat_once() {
   local payload
   payload="$(build_heartbeat_payload)"
-
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/heartbeat" \\
-    -H "X-Node-Token: $NODE_TOKEN" \\
-    -H "Content-Type: application/json" \\
-    -d "$payload" >/dev/null; then
+  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/heartbeat" \
+      -H "X-Node-Token: $NODE_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "$payload" >/dev/null; then
     return 0
   fi
-
   set_last_error "heartbeat report failed"
   return 1
 }
 
 json_number_field() {
-  local key="${1}"
-  local payload="${2}"
-  echo "$payload" | tr -d '\\r\\n' | grep -o "\\"$key\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
+  local key="${1}" payload="${2}"
+  echo "$payload" | tr -d '\r\n' | sed 's/[{}]/ /g' | tr ',' '\n' | awk -F: -v k="\"$key\"" '$1 ~ k { gsub(/[^0-9]/,"",$2); print $2; exit }'
 }
 
 json_bool_field() {
-  local key="${1}"
-  local payload="${2}"
-  if echo "$payload" | tr -d '\\r\\n' | grep -q "\\"$key\\":true"; then
-    echo "true"
-    return
-  fi
-  echo "false"
+  local key="${1}" payload="${2}"
+  echo "$payload" | tr -d '\r\n' | grep -q "\"$key\":true" && echo "true" || echo "false"
 }
 
 generate_event_id() {
-  if [[ -r /proc/sys/kernel/random/uuid ]]; then
-    cat /proc/sys/kernel/random/uuid
-    return
-  fi
-  if command -v uuidgen >/dev/null 2>&1; then
-    uuidgen | tr 'A-Z' 'a-z'
-    return
-  fi
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid; return; fi
+  command -v uuidgen >/dev/null 2>&1 && uuidgen | tr 'A-Z' 'a-z' && return
   date +%s%N
 }
 
 enqueue_apply_event() {
-  local status="${1}"
-  local version="${2}"
-  local message="${3}"
-  local now
-  local event_id
+  local status="$1" version="$2" message="$3"
+  local now event_id
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   event_id="$(generate_event_id)"
-  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"message":"%s","occurred_at":"%s"}\\n' \\
-    "$event_id" "$status" "$version" "$message" "$now" >> "$EVENTS_FILE"
+  local msg
+  msg="$(json_escape "$message")"
+  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"message":"%s","occurred_at":"%s"}\n' \
+    "$event_id" "$status" "$version" "$msg" "$now" >> "$EVENTS_FILE"
 }
 
 flush_pending_events() {
-  if [[ ! -s "$EVENTS_FILE" ]]; then
-    return 0
-  fi
-
-  local event_rows
+  [[ -s "$EVENTS_FILE" ]] || return 0
+  local event_rows payload
   event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", $0) } END { print "" }' "$EVENTS_FILE")"
-  if [[ -z "$event_rows" ]]; then
-    return 0
-  fi
-
-  local payload
-  payload="{\\"node_id\\":\\"$NODE_ID\\",\\"events\\":[$event_rows]}"
-
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/events" \\
-    -H "X-Node-Token: $NODE_TOKEN" \\
-    -H "Content-Type: application/json" \\
-    -d "$payload" >/dev/null; then
+  [[ -n "$event_rows" ]] || return 0
+  payload="{\"node_id\":\"$NODE_ID\",\"events\":[$event_rows]}"
+  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/events" \
+      -H "X-Node-Token: $NODE_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "$payload" >/dev/null; then
     : > "$EVENTS_FILE"
     return 0
   fi
-
   set_last_error "pending events flush failed"
   return 1
 }
 
 apply_target_version() {
-  local target_version="${1}"
-
+  local target_version="$1"
   if [[ -x "$APPLY_HOOK" ]]; then
     if ! "$APPLY_HOOK" "$target_version"; then
       set_last_error "release apply failed"
@@ -523,14 +528,10 @@ apply_target_version() {
 }
 
 reconcile_once() {
-  local current_version
-  local response
-  local desired_version
-  local needs_update
-
+  local current_version response desired_version needs_update
   current_version="$(read_current_version)"
 
-  response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \\
+  response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
     -H "X-Node-Token: $NODE_TOKEN")" || {
     set_last_error "reconcile request failed"
     return 1
@@ -543,11 +544,7 @@ reconcile_once() {
     clear_last_error
     return 0
   fi
-
-  if [[ -z "$desired_version" ]]; then
-    set_last_error "invalid reconcile response"
-    return 1
-  fi
+  [[ -n "$desired_version" ]] || { set_last_error "invalid reconcile response"; return 1; }
 
   if [[ "$desired_version" -le "$current_version" ]]; then
     clear_last_error
@@ -574,11 +571,16 @@ reconcile_loop() {
 
 watchdog_check() {
   start_service() {
-    local sname="${1}"
-    if ! kill -0 "$(cat "$STATE_DIR/${sname}.pid" 2>/dev/null)" 2>/dev/null; then
-       nohup bash "$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
-       echo $! > "$STATE_DIR/${sname}.pid"
+    local sname="$1"
+    local pidfile="$STATE_DIR/${sname}.pid"
+    local logfile="$STATE_DIR/${sname}.log"
+    local pid=""
+    [[ -f "$pidfile" ]] && pid="$(cat "$pidfile" 2>/dev/null || true)" || true
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
     fi
+    nohup bash "$0" "$sname" > "$logfile" 2>&1 &
+    echo $! > "$pidfile"
   }
   start_service "heartbeat"
   start_service "reconcile"
@@ -603,16 +605,24 @@ case "$MODE" in
 esac
 EOF
 
-CONFIG_FILE_ESCAPED="$(printf '%s' "$CONFIG_FILE" | sed 's/[\\/&]/\\&/g')"
-sed -i "s|__NODEHUB_CONFIG_FILE__|$CONFIG_FILE_ESCAPED|g" "$RUNNER_SCRIPT"
+# Replace placeholder config path
+CONFIG_FILE_ESCAPED="$(printf '%s' "$CONFIG_FILE" | sed 's/[\/&]/\\&/g')"
+sedi "s/__NODEHUB_CONFIG_FILE__/${CONFIG_FILE_ESCAPED}/g" "$RUNNER_SCRIPT"
+chmod 700 "$RUNNER_SCRIPT" || true
 
-chmod 700 "$RUNNER_SCRIPT"
-
+# ---------- systemd service files ----------
 if [[ "$INSTALL_MODE" == "user" ]]; then
-  SYSTEMD_TARGET="default.target"
+  HEARTBEAT_SERVICE="${HOME}/.config/systemd/user/nodehub-heartbeat.service"
+  RECONCILE_SERVICE="${HOME}/.config/systemd/user/nodehub-reconcile.service"
+  mkdir -p "${HOME}/.config/systemd/user"
 else
-  SYSTEMD_TARGET="multi-user.target"
+  HEARTBEAT_SERVICE="/etc/systemd/system/nodehub-heartbeat.service"
+  RECONCILE_SERVICE="/etc/systemd/system/nodehub-reconcile.service"
 fi
+
+# Determine systemd targets
+SYSTEMD_TARGET="multi-user.target"
+[[ "$INSTALL_MODE" == "user" ]] && SYSTEMD_TARGET="default.target"
 
 cat > "$HEARTBEAT_SERVICE" <<EOF
 [Unit]
@@ -648,129 +658,157 @@ StartLimitIntervalSec=0
 WantedBy=$SYSTEMD_TARGET
 EOF
 
-echo "================================================"
-echo "NodeHub Agent Bootstrap"
-echo "================================================"
-echo "Install Mode: $INSTALL_MODE"
-echo "Node ID: $NODE_ID"
-echo "TLS Domain: $TLS_DOMAIN"
-echo "Heartbeat Interval: $HEARTBEAT_INTERVAL"
-echo "Reconcile Interval: $RECONCILE_INTERVAL"
-echo "State Directory: $STATE_DIR"
-echo "Agent Root: $AGENT_ROOT"
-echo "Config Root: $CONFIG_ROOT"
-echo "================================================"
-
+# ---------- Enable via systemd if possible; else cron watchdog ----------
 USE_SYSTEMD=0
 SYSTEMCTL_USER_FLAG=""
 
-if [[ "$INSTALL_MODE" == "user" ]]; then
-  # User mode: try user systemd
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
-    USE_SYSTEMD=1
-    SYSTEMCTL_USER_FLAG="--user"
-  fi
-else
-  # System mode: try system systemd
-  if command -v systemctl >/dev/null 2>&1 && systemctl | grep -q '\\-\\.mount' >/dev/null 2>&1; then
-    USE_SYSTEMD=1
-  elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
-    USE_SYSTEMD=1
+if need_cmd systemctl; then
+  if [[ "$INSTALL_MODE" == "user" ]]; then
+    # user systemd available?
+    if systemctl --user show-environment >/dev/null 2>&1; then
+      USE_SYSTEMD=1
+      SYSTEMCTL_USER_FLAG="--user"
+    else
+      warn "User-mode systemd not available (no user session)."
+    fi
+  else
+    # system systemd available?
+    if [[ -d /run/systemd/system ]]; then
+      USE_SYSTEMD=1
+      SYSTEMCTL_USER_FLAG=""
+    fi
   fi
 fi
+
+log "================================================"
+log "NodeHub Agent Bootstrap"
+log "================================================"
+log "Install Mode: $INSTALL_MODE"
+log "Node ID: $NODE_ID"
+log "TLS Domain: ${TLS_DOMAIN:-<none>}"
+log "TLS Domain Alt: ${TLS_DOMAIN_ALT:-<none>}"
+log "Heartbeat Interval: $HEARTBEAT_INTERVAL"
+log "Reconcile Interval: $RECONCILE_INTERVAL"
+log "State Directory: $STATE_DIR"
+log "Agent Root: $AGENT_ROOT"
+log "Config Root: $CONFIG_ROOT"
+log "================================================"
 
 if [[ "$USE_SYSTEMD" -eq 1 ]]; then
-  systemctl $SYSTEMCTL_USER_FLAG daemon-reload
-  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehub-heartbeat.service
-  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehub-reconcile.service
-  systemctl $SYSTEMCTL_USER_FLAG restart nodehub-heartbeat.service nodehub-reconcile.service
+  log "Installing services via systemd..."
+  systemctl $SYSTEMCTL_USER_FLAG daemon-reload || true
+  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehub-heartbeat.service || die "Failed to enable nodehub-heartbeat.service"
+  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehub-reconcile.service || die "Failed to enable nodehub-reconcile.service"
+  systemctl $SYSTEMCTL_USER_FLAG restart nodehub-heartbeat.service nodehub-reconcile.service || true
 
-  echo "Agent services installed via systemd ($INSTALL_MODE mode):"
-  echo "- nodehub-heartbeat.service"
-  echo "- nodehub-reconcile.service"
-  echo "Check status with: systemctl $SYSTEMCTL_USER_FLAG status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
+  log "Services installed:"
+  log "- nodehub-heartbeat.service"
+  log "- nodehub-reconcile.service"
+  log "Check status:"
+  log "  systemctl $SYSTEMCTL_USER_FLAG status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
 else
-  echo "systemd not detected. Falling back to cron-based watchdog daemon."
-  if command -v crontab >/dev/null 2>&1; then
-    (crontab -l 2>/dev/null | grep -v 'agent-runner.sh cron_check' || true; echo "* * * * * bash $AGENT_ROOT/agent-runner.sh cron_check") | crontab -
-  else
-    echo "WARNING: crontab is not available. The agent is running in background, but will NOT automatically restart on reboot."
-    echo "Please install cron, or start it manually after reboot: bash $AGENT_ROOT/agent-runner.sh cron_check"
+  warn "systemd not available; using cron-based watchdog fallback."
+
+  # Ensure cron exists or try install
+  if ! need_cmd crontab; then
+    warn "crontab not found."
+    if is_root; then
+      install_pkgs cron cronie crond busybox-cron >/dev/null 2>&1 || true
+    fi
   fi
-  bash "$AGENT_ROOT/agent-runner.sh" cron_check
-  echo "Agent services started via background watchdog."
-  echo "Check logs in $STATE_DIR/heartbeat.log and $STATE_DIR/reconcile.log"
+
+  if is_root && [[ -d /etc/cron.d ]]; then
+    # safer for root: /etc/cron.d
+    local_cron="/etc/cron.d/nodehub-agent"
+    cat > "$local_cron" <<EOF
+* * * * * root bash "$RUNNER_SCRIPT" cron_check >/dev/null 2>&1
+EOF
+    chmod 644 "$local_cron" || true
+    log "Installed cron watchdog: $local_cron"
+  elif need_cmd crontab; then
+    # user cron
+    (crontab -l 2>/dev/null | grep -v 'agent-runner.sh cron_check' || true; \
+      echo "* * * * * bash \"$RUNNER_SCRIPT\" cron_check >/dev/null 2>&1") | crontab -
+    log "Installed cron watchdog via crontab."
+  else
+    warn "Cron not available. Agent will start now but won't auto-restart on reboot."
+  fi
+
+  # start watchdog now
+  bash "$RUNNER_SCRIPT" cron_check || true
+  log "Watchdog started. Logs:"
+  log "  $STATE_DIR/heartbeat.log"
+  log "  $STATE_DIR/reconcile.log"
 fi
 
-if [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]]; then
-  echo "Applying for SSL certificates..."
-  
+# ---------- SSL via acme.sh (optional) ----------
+issue_certs() {
+  [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]] || return 0
+
+  log "Applying for SSL certificates (acme.sh)..."
+
+  # best-effort install socat if using standalone
+  if [[ -z "$CF_API_TOKEN" ]]; then
+    if ! need_cmd socat; then
+      if is_root; then
+        install_pkgs socat >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+
+  local ACME_SH_DIR
   if [[ "$INSTALL_MODE" == "user" ]]; then
-    ACME_SH_DIR="$HOME/.acme.sh"
+    ACME_SH_DIR="${HOME}/.acme.sh"
   else
     ACME_SH_DIR="/root/.acme.sh"
   fi
-  ACME_SH_EXEC="$ACME_SH_DIR/acme.sh"
+  local ACME_SH_EXEC="${ACME_SH_DIR}/acme.sh"
 
-  if command -v socat >/dev/null 2>&1; then :; else
-    if [[ "$INSTALL_MODE" == "system" ]]; then
-      if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y socat >/dev/null; fi
-      if command -v dnf >/dev/null 2>&1; then dnf install -y socat >/dev/null; fi
-      if command -v yum >/dev/null 2>&1; then yum install -y socat >/dev/null; fi
-    else
-      echo "Warning: socat is required for SSL certificate issuance but cannot be installed in user mode."
-      echo "Please install it manually or use DNS validation mode."
-    fi
-  fi
+  local MAIN_DOMAIN="$TLS_DOMAIN"
+  [[ -z "$MAIN_DOMAIN" ]] && MAIN_DOMAIN="$TLS_DOMAIN_ALT"
 
-  if [[ -n "$TLS_DOMAIN" ]]; then
-    MAIN_DOMAIN="$TLS_DOMAIN"
-  else
-    MAIN_DOMAIN="$TLS_DOMAIN_ALT"
-  fi
-
+  # install acme.sh
   if [[ ! -x "$ACME_SH_EXEC" ]]; then
-    echo "Installing acme.sh..."
-    if [[ -n "$GITHUB_MIRROR" ]]; then
-      MIRROR="${GITHUB_MIRROR%/}"
-      curl -fsSL "$MIRROR/https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" | sh -s email=admin@$MAIN_DOMAIN
-    else
-      curl -fsSL https://get.acme.sh | sh -s email=admin@$MAIN_DOMAIN
-    fi
+    log "Installing acme.sh..."
+    local installer
+    installer="$(wrap_url "https://get.acme.sh")"
+    curl -fsSL "$installer" | sh -s email="admin@${MAIN_DOMAIN}" || die "acme.sh install failed"
   fi
+  [[ -x "$ACME_SH_EXEC" ]] || die "acme.sh not found after installation"
 
-  if [[ -x "$ACME_SH_EXEC" ]]; then
-    $ACME_SH_EXEC --upgrade --auto-upgrade
-    $ACME_SH_EXEC --set-default-ca --server letsencrypt
+  "$ACME_SH_EXEC" --upgrade --auto-upgrade >/dev/null 2>&1 || true
+  "$ACME_SH_EXEC" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
 
-    DOMAINS_ARGS=""
-    if [[ -n "$TLS_DOMAIN" ]]; then DOMAINS_ARGS="$DOMAINS_ARGS -d $TLS_DOMAIN"; fi
-    if [[ -n "$TLS_DOMAIN_ALT" ]]; then DOMAINS_ARGS="$DOMAINS_ARGS -d $TLS_DOMAIN_ALT"; fi
+  local DOMAINS_ARGS=()
+  [[ -n "$TLS_DOMAIN" ]] && DOMAINS_ARGS+=(-d "$TLS_DOMAIN")
+  [[ -n "$TLS_DOMAIN_ALT" ]] && DOMAINS_ARGS+=(-d "$TLS_DOMAIN_ALT")
 
-    mkdir -p "$CONFIG_ROOT/cert"
-    CERT_DIR="$CONFIG_ROOT/cert"
+  mkdir -p "${CONFIG_ROOT}/cert"
+  local CERT_DIR="${CONFIG_ROOT}/cert"
 
-    if [[ -n "$CF_API_TOKEN" ]]; then
-      echo "Using CF DNS API for validation..."
-      export CF_Token="$CF_API_TOKEN"
-      $ACME_SH_EXEC --issue $DOMAINS_ARGS --dns dns_cf --keylength ec-256
-    else
-      if [[ "$INSTALL_MODE" == "user" ]]; then
-        echo "Warning: Standalone mode requires binding to port 80, which needs root privileges."
-        echo "Skipping SSL certificate issuance. Please use --cf-api-token for DNS validation in user mode."
-      else
-        echo "Using Standalone mode for validation..."
-        $ACME_SH_EXEC --issue $DOMAINS_ARGS --standalone --keylength ec-256
-      fi
-    fi
-
-    if [[ "$INSTALL_MODE" == "system" ]] || [[ -n "$CF_API_TOKEN" ]]; then
-      $ACME_SH_EXEC --install-cert -d "$MAIN_DOMAIN" --ecc \\
-        --key-file "$CERT_DIR/server.key" \\
-        --fullchain-file "$CERT_DIR/server.crt"
-      echo "SSL Certificate installed to $CERT_DIR"
-    fi
+  if [[ -n "$CF_API_TOKEN" ]]; then
+    log "Using Cloudflare DNS API validation..."
+    export CF_Token="$CF_API_TOKEN"
+    "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256 || die "acme.sh DNS issue failed"
   else
-    echo "acme.sh installation failed!"
+    # standalone needs port 80 (root)
+    if ! is_root; then
+      warn "Standalone mode requires root (bind :80). Skipping cert issuance. Use --cf-api-token for DNS validation."
+      return 0
+    fi
+    need_cmd socat || warn "socat missing; standalone issuance may fail. Install socat and retry if needed."
+    log "Using standalone validation (port 80)..."
+    "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --standalone --keylength ec-256 || die "acme.sh standalone issue failed"
   fi
-fi
+
+  # install cert (ECC)
+  "$ACME_SH_EXEC" --install-cert -d "$MAIN_DOMAIN" --ecc \
+    --key-file "$CERT_DIR/server.key" \
+    --fullchain-file "$CERT_DIR/server.crt" || die "acme.sh install-cert failed"
+
+  log "SSL certificate installed to: $CERT_DIR"
+}
+
+issue_certs || true
+
+log "Done."
