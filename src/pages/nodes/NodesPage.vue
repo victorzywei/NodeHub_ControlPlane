@@ -151,7 +151,7 @@ async function openDetail(nodeId: string): Promise<void> {
       
       // Generate uninstall command
       const baseUrl = window.location.origin
-      detailUninstallCommand.value = `URL='${baseUrl}/agent/uninstall'; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash`
+      detailUninstallCommand.value = `URL='${baseUrl}/agent/uninstall'; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s -- --remove-binaries --remove-certs --force`
     }
   } catch {
     toastStore.push('节点详情加载失败', 'danger')
@@ -282,7 +282,7 @@ onMounted(loadNodesData)
         <textarea class="textarea" readonly :value="detailUninstallCommand" style="min-height: 60px" />
         <button class="btn btn-danger" @click="copyValue(detailUninstallCommand, '卸载命令')">复制卸载命令</button>
         <div class="muted" style="margin-top: 8px; font-size: 12px">
-          可选参数：--remove-binaries (删除 xray/sing-box)，--remove-certs (删除证书)，--force (跳过确认)
+          此命令会完全卸载 Agent 并删除所有相关文件（包括 xray/sing-box 和证书）
         </div>
       </template>
     </template>

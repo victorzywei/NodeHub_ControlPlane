@@ -1,5 +1,7 @@
 /assets/*  /assets/:splat  200
 /api/*     /api/:splat     200
+/agent/install    /agent-install.sh    200
+/agent/uninstall  /agent-uninstall.sh  200
 /agent/*   /agent/:splat   200
 /sub/*     /sub/:splat     200
 /*.sh      /:splat.sh       200

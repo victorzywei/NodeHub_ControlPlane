@@ -10,8 +10,8 @@ set -euo pipefail
 ############################################
 
 # ---------- Defaults ----------
-REMOVE_BINARIES=0
-REMOVE_CERTS=0
+REMOVE_BINARIES=1
+REMOVE_CERTS=1
 FORCE=0
 
 # ---------- Helpers ----------
