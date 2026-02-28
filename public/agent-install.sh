@@ -788,8 +788,7 @@ issue_certs() {
 
   if [[ -n "$CF_API_TOKEN" ]]; then
     log "Using Cloudflare DNS API validation..."
-    export CF_Token="$CF_API_TOKEN"
-    "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256 || die "acme.sh DNS issue failed"
+    CF_Token="$CF_API_TOKEN" "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256 || die "acme.sh DNS issue failed"
   else
     # standalone needs port 80 (root)
     if ! is_root; then
