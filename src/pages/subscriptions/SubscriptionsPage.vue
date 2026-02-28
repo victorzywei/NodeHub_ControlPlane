@@ -2,7 +2,6 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
-import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import { listNodes } from '@/api/services/nodes'
 import { createSubscription, deleteSubscription, listSubscriptions, updateSubscription } from '@/api/services/subscriptions'
@@ -176,48 +175,39 @@ onMounted(loadData)
     <button class="btn btn-primary" @click="openCreate">新建订阅</button>
   </FilterBar>
 
-  <DataGrid title="订阅列表">
-    <thead>
-      <tr>
-        <th>名称</th>
-        <th>状态</th>
-        <th>可见节点</th>
-        <th>备注</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr v-for="sub in subscriptions" :key="sub.token">
-        <td>
-          <div style="font-weight: 700">{{ sub.name || '未命名订阅' }}</div>
-          <div class="muted" style="font-size: 12px">更新: {{ formatDateTime(sub.updated_at) }}</div>
-        </td>
-        <td>
+  <div class="sub-stack" style="margin-top: 16px;">
+    <div v-for="sub in subscriptions" :key="sub.token" class="card">
+      <div class="sub-head">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="font-weight: 700; font-size: 16px;">{{ sub.name || '未命名订阅' }}</div>
           <span class="badge" :class="sub.enabled ? 'success' : 'warning'">
             {{ sub.enabled ? '启用' : '禁用' }}
           </span>
-        </td>
-        <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          {{ visibleNodesText(sub) }}
-        </td>
-        <td class="muted">{{ sub.remark || '-' }}</td>
-        <td>
-          <div style="display: flex; gap: 6px; align-items: center">
-            <button class="btn btn-secondary" @click="openEdit(sub)">编辑</button>
-            <button class="btn btn-secondary" @click="toggleEnabled(sub)">{{ sub.enabled ? '禁用' : '启用' }}</button>
-            <select class="select" style="width: 100px; font-size: 13px" @change="(e) => { const fmt = (e.target as HTMLSelectElement).value; if (fmt) { copy(subLink(sub.token, fmt)); (e.target as HTMLSelectElement).value = ''; } }">
-              <option value="" disabled selected>复制链接</option>
-              <option v-for="item in linkFormats" :key="item.key" :value="item.key">{{ item.label }}</option>
-            </select>
-            <button class="btn btn-danger" @click="requestDelete(sub.token)">删除</button>
-          </div>
-        </td>
-      </tr>
-      <tr v-if="subscriptions.length === 0">
-        <td colspan="5" class="muted">暂无订阅，点击右上角创建订阅。</td>
-      </tr>
-    </tbody>
-  </DataGrid>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-secondary" @click="openEdit(sub)">编辑</button>
+          <button class="btn btn-secondary" @click="toggleEnabled(sub)">{{ sub.enabled ? '禁用' : '启用' }}</button>
+          <button class="btn btn-danger" @click="requestDelete(sub.token)">删除</button>
+        </div>
+      </div>
+      
+      <div class="muted" style="font-size: 13px; margin-top: 8px; margin-bottom: 16px;">
+        可见节点: {{ visibleNodesText(sub) }} · 更新: {{ formatDateTime(sub.updated_at) }}<template v-if="sub.remark"> · 备注: {{ sub.remark }}</template>
+      </div>
+
+      <div style="display: grid; gap: 8px;">
+        <div v-for="item in linkFormats" :key="item.key" class="sub-link-row">
+          <div class="sub-link-label">{{ item.label }}:</div>
+          <div class="sub-link-text">{{ subLink(sub.token, item.key) }}</div>
+          <button class="btn btn-secondary sub-copy-btn" @click="copy(subLink(sub.token, item.key))">复制</button>
+        </div>
+      </div>
+    </div>
+    
+    <div v-if="subscriptions.length === 0" class="card muted" style="text-align: center; padding: 40px;">
+      暂无订阅，点击右上角创建订阅。
+    </div>
+  </div>
 
   <DetailDrawer v-model="editorOpen" :title="editing ? '编辑订阅' : '创建订阅'">
     <label>
