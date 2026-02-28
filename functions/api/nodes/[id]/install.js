@@ -19,8 +19,8 @@ export async function onRequestGet({ request, env, params }) {
 
   const origin = new URL(request.url).origin
   const command = [
-    `curl -fsSL ${quoteShell(`${origin}/agent/install`)}`,
-    ' | sudo bash -s --',
+    `URL=${quoteShell(`${origin}/agent/install`)}; `,
+    `if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s --`,
     ` --api-base ${quoteShell(origin)}`,
     ` --node-id ${quoteShell(node.id)}`,
     ` --node-token ${quoteShell(node.token)}`,

@@ -36,11 +36,6 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v systemctl >/dev/null 2>&1; then
-  echo "systemctl is required (systemd supervisor)" >&2
-  exit 1
-fi
-
 mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
 chmod 700 "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
 
@@ -133,13 +128,18 @@ read_last_error() {
 }
 
 detect_protocol_app_version() {
+  local cmd_timeout=""
+  if command -v timeout >/dev/null 2>&1; then
+    cmd_timeout="timeout 5"
+  fi
+
   if command -v xray >/dev/null 2>&1; then
-    xray version 2>/dev/null | head -n 1 | tr -d '\\r\\n'
+    $cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
     return
   fi
 
   if command -v sing-box >/dev/null 2>&1; then
-    sing-box version 2>/dev/null | head -n 1 | tr -d '\\r\\n'
+    $cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
     return
   fi
 
@@ -383,12 +383,29 @@ reconcile_loop() {
   done
 }
 
+watchdog_check() {
+  start_service() {
+    local sname="$1"
+    if ! kill -0 "$(cat "$STATE_DIR/${sname}.pid" 2>/dev/null)" 2>/dev/null; then
+       nohup bash "$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
+       echo $! > "$STATE_DIR/${sname}.pid"
+    fi
+  }
+  start_service "heartbeat"
+  start_service "reconcile"
+}
+
 case "$MODE" in
   heartbeat)
+    echo $$ > "$STATE_DIR/heartbeat.pid"
     heartbeat_loop
     ;;
   reconcile)
+    echo $$ > "$STATE_DIR/reconcile.pid"
     reconcile_loop
+    ;;
+  cron_check)
+    watchdog_check
     ;;
   *)
     echo "unknown mode: $MODE" >&2
@@ -441,15 +458,35 @@ echo "reconcile_interval=$RECONCILE_INTERVAL"
 echo "state_dir=$STATE_DIR"
 echo "agent_root=$AGENT_ROOT"
 
-systemctl daemon-reload
-systemctl enable --now nodehub-heartbeat.service
-systemctl enable --now nodehub-reconcile.service
-systemctl restart nodehub-heartbeat.service nodehub-reconcile.service
+USE_SYSTEMD=0
+if command -v systemctl >/dev/null 2>&1 && systemctl | grep -q '\-\.mount' >/dev/null 2>&1; then
+  USE_SYSTEMD=1
+elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+  USE_SYSTEMD=1
+fi
 
-echo "Agent services installed:"
-echo "- nodehub-heartbeat.service"
-echo "- nodehub-reconcile.service"
-echo "Check status with: systemctl status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
+if [[ "$USE_SYSTEMD" -eq 1 ]]; then
+  systemctl daemon-reload
+  systemctl enable --now nodehub-heartbeat.service
+  systemctl enable --now nodehub-reconcile.service
+  systemctl restart nodehub-heartbeat.service nodehub-reconcile.service
+
+  echo "Agent services installed via systemd:"
+  echo "- nodehub-heartbeat.service"
+  echo "- nodehub-reconcile.service"
+  echo "Check status with: systemctl status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
+else
+  echo "systemd not detected. Falling back to cron-based watchdog daemon."
+  if command -v crontab >/dev/null 2>&1; then
+    (crontab -l 2>/dev/null | grep -v 'agent-runner.sh cron_check' || true; echo "* * * * * bash $AGENT_ROOT/agent-runner.sh cron_check") | crontab -
+  else
+    echo "WARNING: crontab is not available. The agent is running in background, but will NOT automatically restart on reboot."
+    echo "Please install cron, or start it manually after reboot: bash $AGENT_ROOT/agent-runner.sh cron_check"
+  fi
+  bash "$AGENT_ROOT/agent-runner.sh" cron_check
+  echo "Agent services started via background watchdog."
+  echo "Check logs in $STATE_DIR/heartbeat.log and $STATE_DIR/reconcile.log"
+fi
 `
 
 export async function onRequestGet() {
