@@ -6,6 +6,8 @@
  * 
  * Serves the bash installation script from /agent-install.sh (static file)
  * This keeps the bash script separate and maintainable.
+ * 
+ * Updated: 2026-03-01
  */
 
 export async function onRequestGet(context) {
