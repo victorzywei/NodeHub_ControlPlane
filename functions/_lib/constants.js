@@ -1,5 +1,5 @@
 ﻿export const APP_VERSION = '2.0.0'
-export const ONLINE_WINDOW_MS = 2 * 60 * 1000
+export const ONLINE_WINDOW_MS = 11 * 60 * 1000
 
 export const BUILTIN_TEMPLATES = [
   {

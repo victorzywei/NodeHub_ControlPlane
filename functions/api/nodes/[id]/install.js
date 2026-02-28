@@ -25,7 +25,7 @@ export async function onRequestGet({ request, env, params }) {
     ` --node-id ${quoteShell(node.id)}`,
     ` --node-token ${quoteShell(node.token)}`,
     ` --tls-domain ${quoteShell(node.entry_cdn || '')}`,
-    ` --heartbeat-interval ${quoteShell('300')}`,
+    ` --heartbeat-interval ${quoteShell('600')}`,
   ].join('')
 
   return ok({ command })
