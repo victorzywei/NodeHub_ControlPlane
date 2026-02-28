@@ -241,12 +241,12 @@ cat > "$RUNNER_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -u
 
-if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 {heartbeat|reconcile|cron_check}" >&2
+if [[ \$# -lt 1 ]]; then
+  echo "Usage: \$0 {heartbeat|reconcile|cron_check}" >&2
   exit 1
 fi
 
-MODE="${1}"
+MODE="\${1}"
 CONFIG_FILE="$CONFIG_FILE"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -378,8 +378,8 @@ memory_stats() {
   fi
 
   local total_kb available_kb used_kb used_mb total_mb usage_x100 usage_percent
-  total_kb="$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)"
-  available_kb="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
+  total_kb="$(awk '/MemTotal:/ { print \$2 }' /proc/meminfo)"
+  available_kb="$(awk '/MemAvailable:/ { print \$2 }' /proc/meminfo)"
 
   if [[ -z "$total_kb" || -z "$available_kb" || "$total_kb" -le 0 ]]; then
     echo "null null null"
@@ -479,7 +479,7 @@ flush_pending_events() {
   fi
 
   local event_rows
-  event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", $0) } END { print "" }' "$EVENTS_FILE")"
+  event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", \$0) } END { print "" }' "$EVENTS_FILE")"
   if [[ -z "$event_rows" ]]; then
     return 0
   fi
@@ -575,8 +575,8 @@ watchdog_check() {
   start_service() {
     local sname="${1}"
     if ! kill -0 "$(cat "$STATE_DIR/${sname}.pid" 2>/dev/null)" 2>/dev/null; then
-       nohup bash "$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
-       echo $! > "$STATE_DIR/${sname}.pid"
+       nohup bash "\$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
+       echo \$! > "$STATE_DIR/${sname}.pid"
     fi
   }
   start_service "heartbeat"
