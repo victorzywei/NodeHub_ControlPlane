@@ -2,4 +2,5 @@
 /api/*     /api/:splat     200
 /agent/*   /agent/:splat   200
 /sub/*     /sub/:splat     200
+/*.sh      /:splat.sh       200
 /*         /               200
