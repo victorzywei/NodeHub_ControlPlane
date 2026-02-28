@@ -42,8 +42,25 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
-chmod 700 "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
+# Try to create system directories first
+INSTALL_MODE="system"
+if ! mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" 2>/dev/null; then
+  echo "================================================"
+  echo "No permission for system directories."
+  echo "Switching to user-mode installation..."
+  echo "================================================"
+  
+  # Switch to user directories
+  STATE_DIR="$HOME/.local/share/nodehub-agent"
+  AGENT_ROOT="$HOME/.local/lib/nodehub-agent"
+  CONFIG_ROOT="$HOME/.config/nodehub-agent"
+  INSTALL_MODE="user"
+  
+  # Create user directories
+  mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT"
+fi
+
+chmod 700 "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" 2>/dev/null || true
 
 echo "Installing official Xray and Sing-box binaries..."
 ARCH="$(uname -m)"
@@ -64,33 +81,48 @@ esac
 
 if [[ -n "$XRAY_ARCH" ]]; then
   if ! command -v unzip >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-    echo "Attempting to install unzip and tar to extract binaries..."
-    if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y unzip tar >/dev/null; fi
-    if command -v dnf >/dev/null 2>&1; then dnf install -y unzip tar >/dev/null; fi
-    if command -v yum >/dev/null 2>&1; then yum install -y unzip tar >/dev/null; fi
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+      echo "Attempting to install unzip and tar to extract binaries..."
+      if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y unzip tar >/dev/null; fi
+      if command -v dnf >/dev/null 2>&1; then dnf install -y unzip tar >/dev/null; fi
+      if command -v yum >/dev/null 2>&1; then yum install -y unzip tar >/dev/null; fi
+    else
+      echo "Warning: unzip and tar are required but cannot be installed in user mode."
+      echo "Please install them manually: apt-get install unzip tar (or equivalent)"
+    fi
   fi
   
-  if ! command -v xray >/dev/null 2>&1 && [[ ! -x /usr/local/bin/xray ]]; then
+  # Determine xray installation paths
+  if [[ "$INSTALL_MODE" == "user" ]]; then
+    XRAY_BIN="$HOME/.local/bin/xray"
+    XRAY_ETC="$HOME/.config/xray"
+    XRAY_SHARE="$HOME/.local/share/xray"
+    XRAY_LOG="$HOME/.local/share/xray/logs"
+    mkdir -p "$HOME/.local/bin"
+  else
+    XRAY_BIN="/usr/local/bin/xray"
+    XRAY_ETC="/usr/local/etc/xray"
+    XRAY_SHARE="/usr/local/share/xray"
+    XRAY_LOG="/var/log/xray"
+  fi
+
+  if ! command -v xray >/dev/null 2>&1 && [[ ! -x "$XRAY_BIN" ]]; then
     echo "Downloading latest Xray-core..."
     mkdir -p /tmp/nodehub-xray
     if curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-\${XRAY_ARCH}.zip"; then
       unzip -q -o /tmp/xray.zip -d /tmp/nodehub-xray || true
       if [[ -f /tmp/nodehub-xray/xray ]]; then
-        if command -v install >/dev/null 2>&1; then
-          install -m 755 /tmp/nodehub-xray/xray /usr/local/bin/xray
-          install -d -m 755 /usr/local/etc/xray /usr/local/share/xray /var/log/xray
-          install -m 644 /tmp/nodehub-xray/geoip.dat /usr/local/share/xray/geoip.dat 2>/dev/null || true
-          install -m 644 /tmp/nodehub-xray/geosite.dat /usr/local/share/xray/geosite.dat 2>/dev/null || true
-        else
-          mkdir -p /usr/local/etc/xray /usr/local/share/xray /var/log/xray
-          chmod 755 /usr/local/etc/xray /usr/local/share/xray /var/log/xray 2>/dev/null || true
-          mv /tmp/nodehub-xray/xray /usr/local/bin/xray
-          chmod 755 /usr/local/bin/xray
-          mv /tmp/nodehub-xray/geoip.dat /usr/local/share/xray/geoip.dat 2>/dev/null || true
-          mv /tmp/nodehub-xray/geosite.dat /usr/local/share/xray/geosite.dat 2>/dev/null || true
-          chmod 644 /usr/local/share/xray/geoip.dat /usr/local/share/xray/geosite.dat 2>/dev/null || true
+        mkdir -p "$XRAY_ETC" "$XRAY_SHARE" "$XRAY_LOG"
+        chmod 755 "$XRAY_ETC" "$XRAY_SHARE" "$XRAY_LOG" 2>/dev/null || true
+        mv /tmp/nodehub-xray/xray "$XRAY_BIN"
+        chmod 755 "$XRAY_BIN"
+        mv /tmp/nodehub-xray/geoip.dat "$XRAY_SHARE/geoip.dat" 2>/dev/null || true
+        mv /tmp/nodehub-xray/geosite.dat "$XRAY_SHARE/geosite.dat" 2>/dev/null || true
+        chmod 644 "$XRAY_SHARE/geoip.dat" "$XRAY_SHARE/geosite.dat" 2>/dev/null || true
+        echo "Xray-core installed to $XRAY_BIN"
+        if [[ "$INSTALL_MODE" == "user" ]]; then
+          echo "Note: Add $HOME/.local/bin to your PATH if not already present"
         fi
-        echo "Xray-core installed to /usr/local/bin/xray (FHS standard path)"
       else
         echo "Xray-core extraction failed."
       fi
@@ -102,7 +134,21 @@ if [[ -n "$XRAY_ARCH" ]]; then
     echo "Xray-core is already installed."
   fi
 
-  if ! command -v sing-box >/dev/null 2>&1 && [[ ! -x /usr/local/bin/sing-box ]]; then
+  # Determine sing-box installation paths
+  if [[ "$INSTALL_MODE" == "user" ]]; then
+    SINGBOX_BIN="$HOME/.local/bin/sing-box"
+    SINGBOX_ETC="$HOME/.config/sing-box"
+    SINGBOX_LIB="$HOME/.local/share/sing-box"
+    SINGBOX_LOG="$HOME/.local/share/sing-box/logs"
+    mkdir -p "$HOME/.local/bin"
+  else
+    SINGBOX_BIN="/usr/local/bin/sing-box"
+    SINGBOX_ETC="/etc/sing-box"
+    SINGBOX_LIB="/var/lib/sing-box"
+    SINGBOX_LOG="/var/log/sing-box"
+  fi
+
+  if ! command -v sing-box >/dev/null 2>&1 && [[ ! -x "$SINGBOX_BIN" ]]; then
     echo "Downloading latest sing-box..."
     SINGBOX_LATEST_URL=$(curl -w "%{url_effective}" -I -L -s -S "https://github.com/SagerNet/sing-box/releases/latest" -o /dev/null)
     SINGBOX_LATEST_TAG=$(echo "$SINGBOX_LATEST_URL" | grep -oE '[^/]+$')
@@ -114,16 +160,14 @@ if [[ -n "$XRAY_ARCH" ]]; then
       if curl -fsSL -o /tmp/sing-box.tar.gz "$SINGBOX_URL"; then
         tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || true
         if [[ -f "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" ]]; then
-          if command -v install >/dev/null 2>&1; then
-            install -m 755 "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" /usr/local/bin/sing-box
-            install -d -m 755 /etc/sing-box /var/lib/sing-box /var/log/sing-box
-          else
-            mkdir -p /etc/sing-box /var/lib/sing-box /var/log/sing-box
-            chmod 755 /etc/sing-box /var/lib/sing-box /var/log/sing-box 2>/dev/null || true
-            mv "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" /usr/local/bin/sing-box
-            chmod 755 /usr/local/bin/sing-box
+          mkdir -p "$SINGBOX_ETC" "$SINGBOX_LIB" "$SINGBOX_LOG"
+          chmod 755 "$SINGBOX_ETC" "$SINGBOX_LIB" "$SINGBOX_LOG" 2>/dev/null || true
+          mv "/tmp/sing-box-\${SINGBOX_VERSION}-linux-\${SINGBOX_ARCH}/sing-box" "$SINGBOX_BIN"
+          chmod 755 "$SINGBOX_BIN"
+          echo "sing-box installed to $SINGBOX_BIN"
+          if [[ "$INSTALL_MODE" == "user" ]]; then
+            echo "Note: Add $HOME/.local/bin to your PATH if not already present"
           fi
-          echo "sing-box installed to /usr/local/bin/sing-box (official standard path)"
         else
           echo "sing-box extraction failed."
         fi
@@ -141,8 +185,15 @@ fi
 
 CONFIG_FILE="$CONFIG_ROOT/config.env"
 RUNNER_SCRIPT="$AGENT_ROOT/agent-runner.sh"
-HEARTBEAT_SERVICE="/etc/systemd/system/nodehub-heartbeat.service"
-RECONCILE_SERVICE="/etc/systemd/system/nodehub-reconcile.service"
+
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  HEARTBEAT_SERVICE="$HOME/.config/systemd/user/nodehub-heartbeat.service"
+  RECONCILE_SERVICE="$HOME/.config/systemd/user/nodehub-reconcile.service"
+  mkdir -p "$HOME/.config/systemd/user"
+else
+  HEARTBEAT_SERVICE="/etc/systemd/system/nodehub-heartbeat.service"
+  RECONCILE_SERVICE="/etc/systemd/system/nodehub-reconcile.service"
+fi
 
 cat > "$CONFIG_FILE" <<EOF
 API_BASE="$API_BASE"
@@ -158,43 +209,44 @@ STATE_DIR="$STATE_DIR"
 EOF
 chmod 600 "$CONFIG_FILE"
 
-cat > "$RUNNER_SCRIPT" <<'EOF'
+cat > "$RUNNER_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -u
 
-MODE="$1"
-CONFIG_FILE="/etc/nodehub-agent/config.env"
+MODE="\$1"
+CONFIG_FILE="$CONFIG_FILE"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "config file missing: $CONFIG_FILE" >&2
+if [[ ! -f "\$CONFIG_FILE" ]]; then
+  echo "config file missing: \$CONFIG_FILE" >&2
   exit 1
 fi
 
-# shellcheck source=/etc/nodehub-agent/config.env
-source "$CONFIG_FILE"
+# shellcheck source=$CONFIG_FILE
+source "\$CONFIG_FILE"
 
-EVENTS_FILE="$STATE_DIR/pending-events.jsonl"
-VERSION_FILE="$STATE_DIR/current-version"
-APPLY_HOOK="/usr/local/lib/nodehub-agent/hooks/apply.sh"
-ERROR_FILE="$STATE_DIR/last-error.log"
+EVENTS_FILE="\$STATE_DIR/pending-events.jsonl"
+VERSION_FILE="\$STATE_DIR/current-version"
+APPLY_HOOK_DIR="\$(dirname "\$STATE_DIR")/../lib/nodehub-agent/hooks"
+APPLY_HOOK="\$APPLY_HOOK_DIR/apply.sh"
+ERROR_FILE="\$STATE_DIR/last-error.log"
 
-mkdir -p "$STATE_DIR"
-touch "$EVENTS_FILE"
-touch "$ERROR_FILE"
-if [[ ! -f "$VERSION_FILE" ]]; then
-  echo "0" > "$VERSION_FILE"
+mkdir -p "\$STATE_DIR"
+touch "\$EVENTS_FILE"
+touch "\$ERROR_FILE"
+if [[ ! -f "\$VERSION_FILE" ]]; then
+  echo "0" > "\$VERSION_FILE"
 fi
 
 read_current_version() {
-  if [[ ! -f "$VERSION_FILE" ]]; then
+  if [[ ! -f "\$VERSION_FILE" ]]; then
     echo "0"
     return
   fi
 
   local raw
-  raw="$(tr -d '\\r\\n' < "$VERSION_FILE")"
-  if [[ "$raw" =~ ^[0-9]+$ ]]; then
-    echo "$raw"
+  raw="\$(tr -d '\\r\\n' < "\$VERSION_FILE")"
+  if [[ "\$raw" =~ ^[0-9]+\$ ]]; then
+    echo "\$raw"
     return
   fi
 
@@ -202,32 +254,32 @@ read_current_version() {
 }
 
 trim_text() {
-  printf '%s' "$1" | tr '\\r\\n\\t' '   '
+  printf '%s' "\$1" | tr '\\r\\n\\t' '   '
 }
 
 json_escape() {
-  printf '%s' "$1" | tr '\\r\\n\\t' '   ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'
+  printf '%s' "\$1" | tr '\\r\\n\\t' '   ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'
 }
 
 set_last_error() {
   local message
-  message="$(trim_text "$1")"
-  printf '%s' "$message" > "$ERROR_FILE"
+  message="\$(trim_text "\$1")"
+  printf '%s' "\$message" > "\$ERROR_FILE"
 }
 
 clear_last_error() {
-  : > "$ERROR_FILE"
+  : > "\$ERROR_FILE"
 }
 
 read_last_error() {
-  if [[ ! -f "$ERROR_FILE" ]]; then
+  if [[ ! -f "\$ERROR_FILE" ]]; then
     echo ""
     return
   fi
 
   local message
-  message="$(cat "$ERROR_FILE" 2>/dev/null || true)"
-  trim_text "$message"
+  message="\$(cat "\$ERROR_FILE" 2>/dev/null || true)"
+  trim_text "\$message"
 }
 
 detect_protocol_app_version() {
@@ -237,12 +289,12 @@ detect_protocol_app_version() {
   fi
 
   if command -v xray >/dev/null 2>&1; then
-    $cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
+    \$cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
     return
   fi
 
   if command -v sing-box >/dev/null 2>&1; then
-    $cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
+    \$cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\\r\\n' || true
     return
   fi
 
@@ -270,20 +322,20 @@ cpu_usage_percent() {
   }
 
   local total1 total2 idle_total1 idle_total2 total_delta idle_delta usage_x100
-  total1=$((user1 + nice1 + system1 + idle1 + iowait1 + irq1 + softirq1 + steal1))
-  total2=$((user2 + nice2 + system2 + idle2 + iowait2 + irq2 + softirq2 + steal2))
-  idle_total1=$((idle1 + iowait1))
-  idle_total2=$((idle2 + iowait2))
-  total_delta=$((total2 - total1))
-  idle_delta=$((idle_total2 - idle_total1))
+  total1=\$((user1 + nice1 + system1 + idle1 + iowait1 + irq1 + softirq1 + steal1))
+  total2=\$((user2 + nice2 + system2 + idle2 + iowait2 + irq2 + softirq2 + steal2))
+  idle_total1=\$((idle1 + iowait1))
+  idle_total2=\$((idle2 + iowait2))
+  total_delta=\$((total2 - total1))
+  idle_delta=\$((idle_total2 - idle_total1))
 
-  if [[ "$total_delta" -le 0 ]]; then
+  if [[ "\$total_delta" -le 0 ]]; then
     echo "null"
     return
   fi
 
-  usage_x100=$(( (10000 * (total_delta - idle_delta)) / total_delta ))
-  awk "BEGIN { printf \\"%.2f\\", $usage_x100 / 100 }"
+  usage_x100=\$(( (10000 * (total_delta - idle_delta)) / total_delta ))
+  awk "BEGIN { printf \\"%.2f\\", \$usage_x100 / 100 }"
 }
 
 memory_stats() {
@@ -293,25 +345,25 @@ memory_stats() {
   fi
 
   local total_kb available_kb used_kb used_mb total_mb usage_x100 usage_percent
-  total_kb="$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)"
-  available_kb="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
+  total_kb="\$(awk '/MemTotal:/ { print \$2 }' /proc/meminfo)"
+  available_kb="\$(awk '/MemAvailable:/ { print \$2 }' /proc/meminfo)"
 
-  if [[ -z "$total_kb" || -z "$available_kb" || "$total_kb" -le 0 ]]; then
+  if [[ -z "\$total_kb" || -z "\$available_kb" || "\$total_kb" -le 0 ]]; then
     echo "null null null"
     return
   fi
 
-  used_kb=$((total_kb - available_kb))
-  if [[ "$used_kb" -lt 0 ]]; then
+  used_kb=\$((total_kb - available_kb))
+  if [[ "\$used_kb" -lt 0 ]]; then
     used_kb=0
   fi
 
-  used_mb=$((used_kb / 1024))
-  total_mb=$((total_kb / 1024))
-  usage_x100=$(( (10000 * used_kb) / total_kb ))
-  usage_percent="$(awk "BEGIN { printf \\"%.2f\\", $usage_x100 / 100 }")"
+  used_mb=\$((used_kb / 1024))
+  total_mb=\$((total_kb / 1024))
+  usage_x100=\$(( (10000 * used_kb) / total_kb ))
+  usage_percent="\$(awk "BEGIN { printf \\"%.2f\\", \$usage_x100 / 100 }")"
 
-  echo "$used_mb $total_mb $usage_percent"
+  echo "\$used_mb \$total_mb \$usage_percent"
 }
 
 build_heartbeat_payload() {
@@ -319,28 +371,28 @@ build_heartbeat_payload() {
   local memory_used memory_total memory_usage
   local deploy_json protocol_json error_json
 
-  current_version="$(read_current_version)"
-  deploy_info="applied_version=v$current_version"
-  protocol_version="$(detect_protocol_app_version)"
-  error_message="$(read_last_error)"
-  cpu_usage="$(cpu_usage_percent)"
-  read -r memory_used memory_total memory_usage <<< "$(memory_stats)"
+  current_version="\$(read_current_version)"
+  deploy_info="applied_version=v\$current_version"
+  protocol_version="\$(detect_protocol_app_version)"
+  error_message="\$(read_last_error)"
+  cpu_usage="\$(cpu_usage_percent)"
+  read -r memory_used memory_total memory_usage <<< "\$(memory_stats)"
 
-  deploy_json="$(json_escape "$deploy_info")"
-  protocol_json="$(json_escape "$protocol_version")"
-  error_json="$(json_escape "$error_message")"
+  deploy_json="\$(json_escape "\$deploy_info")"
+  protocol_json="\$(json_escape "\$protocol_version")"
+  error_json="\$(json_escape "\$error_message")"
 
-  echo "{\\"node_id\\":\\"$NODE_ID\\",\\"deploy_info\\":\\"$deploy_json\\",\\"protocol_app_version\\":\\"$protocol_json\\",\\"error_message\\":\\"$error_json\\",\\"cpu_usage_percent\\":$cpu_usage,\\"memory_used_mb\\":$memory_used,\\"memory_total_mb\\":$memory_total,\\"memory_usage_percent\\":$memory_usage}"
+  echo "{\\"node_id\\":\\"\$NODE_ID\\",\\"deploy_info\\":\\"\$deploy_json\\",\\"protocol_app_version\\":\\"\$protocol_json\\",\\"error_message\\":\\"\$error_json\\",\\"cpu_usage_percent\\":\$cpu_usage,\\"memory_used_mb\\":\$memory_used,\\"memory_total_mb\\":\$memory_total,\\"memory_usage_percent\\":\$memory_usage}"
 }
 
 heartbeat_once() {
   local payload
-  payload="$(build_heartbeat_payload)"
+  payload="\$(build_heartbeat_payload)"
 
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/heartbeat" \\
-    -H "X-Node-Token: $NODE_TOKEN" \\
+  if curl -fsS --max-time 15 -X POST "\$API_BASE/agent/heartbeat" \\
+    -H "X-Node-Token: \$NODE_TOKEN" \\
     -H "Content-Type: application/json" \\
-    -d "$payload" >/dev/null; then
+    -d "\$payload" >/dev/null; then
     return 0
   fi
 
@@ -349,15 +401,15 @@ heartbeat_once() {
 }
 
 json_number_field() {
-  local key="$1"
-  local payload="$2"
-  echo "$payload" | tr -d '\\r\\n' | grep -o "\\"$key\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
+  local key="\$1"
+  local payload="\$2"
+  echo "\$payload" | tr -d '\\r\\n' | grep -o "\\"\$key\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
 }
 
 json_bool_field() {
-  local key="$1"
-  local payload="$2"
-  if echo "$payload" | tr -d '\\r\\n' | grep -q "\\"$key\\":true"; then
+  local key="\$1"
+  local payload="\$2"
+  if echo "\$payload" | tr -d '\\r\\n' | grep -q "\\"\$key\\":true"; then
     echo "true"
     return
   fi
@@ -377,36 +429,36 @@ generate_event_id() {
 }
 
 enqueue_apply_event() {
-  local status="$1"
-  local version="$2"
-  local message="$3"
+  local status="\$1"
+  local version="\$2"
+  local message="\$3"
   local now
   local event_id
-  now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  event_id="$(generate_event_id)"
+  now="\$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  event_id="\$(generate_event_id)"
   printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"message":"%s","occurred_at":"%s"}\\n' \\
-    "$event_id" "$status" "$version" "$message" "$now" >> "$EVENTS_FILE"
+    "\$event_id" "\$status" "\$version" "\$message" "\$now" >> "\$EVENTS_FILE"
 }
 
 flush_pending_events() {
-  if [[ ! -s "$EVENTS_FILE" ]]; then
+  if [[ ! -s "\$EVENTS_FILE" ]]; then
     return 0
   fi
 
   local event_rows
-  event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", $0) } END { print "" }' "$EVENTS_FILE")"
-  if [[ -z "$event_rows" ]]; then
+  event_rows="\$(awk 'NF { if (c++ > 0) printf(","); printf("%s", \$0) } END { print "" }' "\$EVENTS_FILE")"
+  if [[ -z "\$event_rows" ]]; then
     return 0
   fi
 
   local payload
-  payload="{\\"node_id\\":\\"$NODE_ID\\",\\"events\\":[$event_rows]}"
+  payload="{\\"node_id\\":\\"\$NODE_ID\\",\\"events\\":[\$event_rows]}"
 
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/events" \\
-    -H "X-Node-Token: $NODE_TOKEN" \\
+  if curl -fsS --max-time 15 -X POST "\$API_BASE/agent/events" \\
+    -H "X-Node-Token: \$NODE_TOKEN" \\
     -H "Content-Type: application/json" \\
-    -d "$payload" >/dev/null; then
-    : > "$EVENTS_FILE"
+    -d "\$payload" >/dev/null; then
+    : > "\$EVENTS_FILE"
     return 0
   fi
 
@@ -415,24 +467,24 @@ flush_pending_events() {
 }
 
 apply_target_version() {
-  local target_version="$1"
+  local target_version="\$1"
 
-  if [[ -x "$APPLY_HOOK" ]]; then
-    if ! "$APPLY_HOOK" "$target_version"; then
+  if [[ -x "\$APPLY_HOOK" ]]; then
+    if ! "\$APPLY_HOOK" "\$target_version"; then
       set_last_error "release apply failed"
-      enqueue_apply_event "failed" "$target_version" "release apply failed"
+      enqueue_apply_event "failed" "\$target_version" "release apply failed"
       return 1
     fi
   fi
 
-  if echo "$target_version" > "$VERSION_FILE"; then
-    enqueue_apply_event "ok" "$target_version" "release applied"
+  if echo "\$target_version" > "\$VERSION_FILE"; then
+    enqueue_apply_event "ok" "\$target_version" "release applied"
     clear_last_error
     return 0
   fi
 
   set_last_error "release apply failed"
-  enqueue_apply_event "failed" "$target_version" "release apply failed"
+  enqueue_apply_event "failed" "\$target_version" "release apply failed"
   return 1
 }
 
@@ -442,39 +494,39 @@ reconcile_once() {
   local desired_version
   local needs_update
 
-  current_version="$(read_current_version)"
+  current_version="\$(read_current_version)"
 
-  response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \\
-    -H "X-Node-Token: $NODE_TOKEN")" || {
+  response="\$(curl -fsS --max-time 15 "\$API_BASE/agent/reconcile?node_id=\$NODE_ID&current_version=\$current_version" \\
+    -H "X-Node-Token: \$NODE_TOKEN")" || {
     set_last_error "reconcile request failed"
     return 1
   }
 
-  desired_version="$(json_number_field "desired_version" "$response")"
-  needs_update="$(json_bool_field "needs_update" "$response")"
+  desired_version="\$(json_number_field "desired_version" "\$response")"
+  needs_update="\$(json_bool_field "needs_update" "\$response")"
 
-  if [[ "$needs_update" != "true" ]]; then
+  if [[ "\$needs_update" != "true" ]]; then
     clear_last_error
     return 0
   fi
 
-  if [[ -z "$desired_version" ]]; then
+  if [[ -z "\$desired_version" ]]; then
     set_last_error "invalid reconcile response"
     return 1
   fi
 
-  if [[ "$desired_version" -le "$current_version" ]]; then
+  if [[ "\$desired_version" -le "\$current_version" ]]; then
     clear_last_error
     return 0
   fi
 
-  apply_target_version "$desired_version"
+  apply_target_version "\$desired_version"
 }
 
 heartbeat_loop() {
   while true; do
     heartbeat_once || true
-    sleep "$HEARTBEAT_INTERVAL"
+    sleep "\$HEARTBEAT_INTERVAL"
   done
 }
 
@@ -482,16 +534,16 @@ reconcile_loop() {
   while true; do
     flush_pending_events || true
     reconcile_once || true
-    sleep "$RECONCILE_INTERVAL"
+    sleep "\$RECONCILE_INTERVAL"
   done
 }
 
 watchdog_check() {
   start_service() {
-    local sname="$1"
-    if ! kill -0 "$(cat "$STATE_DIR/\${sname}.pid" 2>/dev/null)" 2>/dev/null; then
-       nohup bash "$0" "$sname" > "$STATE_DIR/\${sname}.log" 2>&1 &
-       echo $! > "$STATE_DIR/\${sname}.pid"
+    local sname="\$1"
+    if ! kill -0 "\$(cat "\$STATE_DIR/\${sname}.pid" 2>/dev/null)" 2>/dev/null; then
+       nohup bash "\$0" "\$sname" > "\$STATE_DIR/\${sname}.log" 2>&1 &
+       echo \$! > "\$STATE_DIR/\${sname}.pid"
     fi
   }
   start_service "heartbeat"
@@ -519,6 +571,12 @@ EOF
 
 chmod 700 "$RUNNER_SCRIPT"
 
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  SYSTEMD_TARGET="default.target"
+else
+  SYSTEMD_TARGET="multi-user.target"
+fi
+
 cat > "$HEARTBEAT_SERVICE" <<EOF
 [Unit]
 Description=NodeHub Heartbeat Loop
@@ -533,7 +591,7 @@ RestartSec=2
 StartLimitIntervalSec=0
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_TARGET
 EOF
 
 cat > "$RECONCILE_SERVICE" <<EOF
@@ -550,34 +608,50 @@ RestartSec=2
 StartLimitIntervalSec=0
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_TARGET
 EOF
 
-echo "NodeHub agent bootstrap"
-echo "node_id=$NODE_ID"
-echo "tls_domain=$TLS_DOMAIN"
-echo "heartbeat_interval=$HEARTBEAT_INTERVAL"
-echo "reconcile_interval=$RECONCILE_INTERVAL"
-echo "state_dir=$STATE_DIR"
-echo "agent_root=$AGENT_ROOT"
+echo "================================================"
+echo "NodeHub Agent Bootstrap"
+echo "================================================"
+echo "Install Mode: $INSTALL_MODE"
+echo "Node ID: $NODE_ID"
+echo "TLS Domain: $TLS_DOMAIN"
+echo "Heartbeat Interval: $HEARTBEAT_INTERVAL"
+echo "Reconcile Interval: $RECONCILE_INTERVAL"
+echo "State Directory: $STATE_DIR"
+echo "Agent Root: $AGENT_ROOT"
+echo "Config Root: $CONFIG_ROOT"
+echo "================================================"
 
 USE_SYSTEMD=0
-if command -v systemctl >/dev/null 2>&1 && systemctl | grep -q '\\-\\.mount' >/dev/null 2>&1; then
-  USE_SYSTEMD=1
-elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
-  USE_SYSTEMD=1
+SYSTEMCTL_USER_FLAG=""
+
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  # User mode: try user systemd
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+    USE_SYSTEMD=1
+    SYSTEMCTL_USER_FLAG="--user"
+  fi
+else
+  # System mode: try system systemd
+  if command -v systemctl >/dev/null 2>&1 && systemctl | grep -q '\\-\\.mount' >/dev/null 2>&1; then
+    USE_SYSTEMD=1
+  elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+    USE_SYSTEMD=1
+  fi
 fi
 
 if [[ "$USE_SYSTEMD" -eq 1 ]]; then
-  systemctl daemon-reload
-  systemctl enable --now nodehub-heartbeat.service
-  systemctl enable --now nodehub-reconcile.service
-  systemctl restart nodehub-heartbeat.service nodehub-reconcile.service
+  systemctl $SYSTEMCTL_USER_FLAG daemon-reload
+  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehub-heartbeat.service
+  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehub-reconcile.service
+  systemctl $SYSTEMCTL_USER_FLAG restart nodehub-heartbeat.service nodehub-reconcile.service
 
-  echo "Agent services installed via systemd:"
+  echo "Agent services installed via systemd ($INSTALL_MODE mode):"
   echo "- nodehub-heartbeat.service"
   echo "- nodehub-reconcile.service"
-  echo "Check status with: systemctl status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
+  echo "Check status with: systemctl $SYSTEMCTL_USER_FLAG status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
 else
   echo "systemd not detected. Falling back to cron-based watchdog daemon."
   if command -v crontab >/dev/null 2>&1; then
@@ -593,13 +667,23 @@ fi
 
 if [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]]; then
   echo "Applying for SSL certificates..."
-  ACME_SH_DIR="/root/.acme.sh"
+  
+  if [[ "$INSTALL_MODE" == "user" ]]; then
+    ACME_SH_DIR="$HOME/.acme.sh"
+  else
+    ACME_SH_DIR="/root/.acme.sh"
+  fi
   ACME_SH_EXEC="$ACME_SH_DIR/acme.sh"
 
   if command -v socat >/dev/null 2>&1; then :; else
-    if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y socat >/dev/null; fi
-    if command -v dnf >/dev/null 2>&1; then dnf install -y socat >/dev/null; fi
-    if command -v yum >/dev/null 2>&1; then yum install -y socat >/dev/null; fi
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+      if command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null && apt-get install -y socat >/dev/null; fi
+      if command -v dnf >/dev/null 2>&1; then dnf install -y socat >/dev/null; fi
+      if command -v yum >/dev/null 2>&1; then yum install -y socat >/dev/null; fi
+    else
+      echo "Warning: socat is required for SSL certificate issuance but cannot be installed in user mode."
+      echo "Please install it manually or use DNS validation mode."
+    fi
   fi
 
   if [[ -n "$TLS_DOMAIN" ]]; then
@@ -634,14 +718,21 @@ if [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]]; then
       export CF_Token="$CF_API_TOKEN"
       $ACME_SH_EXEC --issue $DOMAINS_ARGS --dns dns_cf --keylength ec-256
     else
-      echo "Using Standalone mode for validation..."
-      $ACME_SH_EXEC --issue $DOMAINS_ARGS --standalone --keylength ec-256
+      if [[ "$INSTALL_MODE" == "user" ]]; then
+        echo "Warning: Standalone mode requires binding to port 80, which needs root privileges."
+        echo "Skipping SSL certificate issuance. Please use --cf-api-token for DNS validation in user mode."
+      else
+        echo "Using Standalone mode for validation..."
+        $ACME_SH_EXEC --issue $DOMAINS_ARGS --standalone --keylength ec-256
+      fi
     fi
 
-    $ACME_SH_EXEC --install-cert -d "$MAIN_DOMAIN" --ecc \\
-      --key-file "$CERT_DIR/server.key" \\
-      --fullchain-file "$CERT_DIR/server.crt"
-    echo "SSL Certificate installed to $CERT_DIR"
+    if [[ "$INSTALL_MODE" == "system" ]] || [[ -n "$CF_API_TOKEN" ]]; then
+      $ACME_SH_EXEC --install-cert -d "$MAIN_DOMAIN" --ecc \\
+        --key-file "$CERT_DIR/server.key" \\
+        --fullchain-file "$CERT_DIR/server.crt"
+      echo "SSL Certificate installed to $CERT_DIR"
+    fi
   else
     echo "acme.sh installation failed!"
   fi
