@@ -234,20 +234,21 @@ CF_API_TOKEN="$CF_API_TOKEN"
 HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
 RECONCILE_INTERVAL="$RECONCILE_INTERVAL"
 STATE_DIR="$STATE_DIR"
+AGENT_ROOT="$AGENT_ROOT"
 EOF
 chmod 600 "$CONFIG_FILE"
 
-cat > "$RUNNER_SCRIPT" <<EOF
+cat > "$RUNNER_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
 set -u
 
-if [[ \$# -lt 1 ]]; then
-  echo "Usage: \$0 {heartbeat|reconcile|cron_check}" >&2
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 {heartbeat|reconcile|cron_check}" >&2
   exit 1
 fi
 
-MODE="\${1}"
-CONFIG_FILE="$CONFIG_FILE"
+MODE="${1}"
+CONFIG_FILE="__NODEHUB_CONFIG_FILE__"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "config file missing: $CONFIG_FILE" >&2
@@ -259,7 +260,7 @@ source "$CONFIG_FILE"
 
 EVENTS_FILE="$STATE_DIR/pending-events.jsonl"
 VERSION_FILE="$STATE_DIR/current-version"
-APPLY_HOOK_DIR="$(dirname "$STATE_DIR")/../lib/nodehub-agent/hooks"
+APPLY_HOOK_DIR="${AGENT_ROOT:-$(dirname "$STATE_DIR")/../lib/nodehub-agent}/hooks"
 APPLY_HOOK="$APPLY_HOOK_DIR/apply.sh"
 ERROR_FILE="$STATE_DIR/last-error.log"
 
@@ -378,8 +379,8 @@ memory_stats() {
   fi
 
   local total_kb available_kb used_kb used_mb total_mb usage_x100 usage_percent
-  total_kb="$(awk '/MemTotal:/ { print \$2 }' /proc/meminfo)"
-  available_kb="$(awk '/MemAvailable:/ { print \$2 }' /proc/meminfo)"
+  total_kb="$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)"
+  available_kb="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
 
   if [[ -z "$total_kb" || -z "$available_kb" || "$total_kb" -le 0 ]]; then
     echo "null null null"
@@ -479,7 +480,7 @@ flush_pending_events() {
   fi
 
   local event_rows
-  event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", \$0) } END { print "" }' "$EVENTS_FILE")"
+  event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", $0) } END { print "" }' "$EVENTS_FILE")"
   if [[ -z "$event_rows" ]]; then
     return 0
   fi
@@ -575,8 +576,8 @@ watchdog_check() {
   start_service() {
     local sname="${1}"
     if ! kill -0 "$(cat "$STATE_DIR/${sname}.pid" 2>/dev/null)" 2>/dev/null; then
-       nohup bash "\$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
-       echo \$! > "$STATE_DIR/${sname}.pid"
+       nohup bash "$0" "$sname" > "$STATE_DIR/${sname}.log" 2>&1 &
+       echo $! > "$STATE_DIR/${sname}.pid"
     fi
   }
   start_service "heartbeat"
@@ -585,11 +586,11 @@ watchdog_check() {
 
 case "$MODE" in
   heartbeat)
-    echo \$\$ > "$STATE_DIR/heartbeat.pid"
+    echo $$ > "$STATE_DIR/heartbeat.pid"
     heartbeat_loop
     ;;
   reconcile)
-    echo \$\$ > "$STATE_DIR/reconcile.pid"
+    echo $$ > "$STATE_DIR/reconcile.pid"
     reconcile_loop
     ;;
   cron_check)
@@ -601,6 +602,9 @@ case "$MODE" in
     ;;
 esac
 EOF
+
+CONFIG_FILE_ESCAPED="$(printf '%s' "$CONFIG_FILE" | sed 's/[\\/&]/\\&/g')"
+sed -i "s|__NODEHUB_CONFIG_FILE__|$CONFIG_FILE_ESCAPED|g" "$RUNNER_SCRIPT"
 
 chmod 700 "$RUNNER_SCRIPT"
 
