@@ -14,6 +14,14 @@ export interface NodeRecord {
   desired_version: number
   applied_version: number
   last_seen_at: string | null
+  deploy_info: string
+  protocol_app_version: string
+  last_heartbeat_error: string
+  cpu_usage_percent: number | null
+  memory_used_mb: number | null
+  memory_total_mb: number | null
+  memory_usage_percent: number | null
+  heartbeat_reported_at: string | null
   last_release_status: 'idle' | 'pending' | 'ok' | 'failed'
   last_release_message: string
   created_at: string

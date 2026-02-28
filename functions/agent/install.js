@@ -5,7 +5,7 @@ API_BASE=""
 NODE_ID=""
 NODE_TOKEN=""
 TLS_DOMAIN=""
-HEARTBEAT_INTERVAL=15
+HEARTBEAT_INTERVAL=300
 RECONCILE_INTERVAL=15
 STATE_DIR="/var/lib/nodehub-agent"
 AGENT_ROOT="/usr/local/lib/nodehub-agent"
@@ -78,9 +78,11 @@ source "$CONFIG_FILE"
 EVENTS_FILE="$STATE_DIR/pending-events.jsonl"
 VERSION_FILE="$STATE_DIR/current-version"
 APPLY_HOOK="/usr/local/lib/nodehub-agent/hooks/apply.sh"
+ERROR_FILE="$STATE_DIR/last-error.log"
 
 mkdir -p "$STATE_DIR"
 touch "$EVENTS_FILE"
+touch "$ERROR_FILE"
 if [[ ! -f "$VERSION_FILE" ]]; then
   echo "0" > "$VERSION_FILE"
 fi
@@ -101,16 +103,158 @@ read_current_version() {
   echo "0"
 }
 
+trim_text() {
+  printf '%s' "$1" | tr '\\r\\n\\t' '   '
+}
+
+json_escape() {
+  printf '%s' "$1" | tr '\\r\\n\\t' '   ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g'
+}
+
+set_last_error() {
+  local message
+  message="$(trim_text "$1")"
+  printf '%s' "$message" > "$ERROR_FILE"
+}
+
+clear_last_error() {
+  : > "$ERROR_FILE"
+}
+
+read_last_error() {
+  if [[ ! -f "$ERROR_FILE" ]]; then
+    echo ""
+    return
+  fi
+
+  local message
+  message="$(cat "$ERROR_FILE" 2>/dev/null || true)"
+  trim_text "$message"
+}
+
+detect_protocol_app_version() {
+  if command -v xray >/dev/null 2>&1; then
+    xray version 2>/dev/null | head -n 1 | tr -d '\\r\\n'
+    return
+  fi
+
+  if command -v sing-box >/dev/null 2>&1; then
+    sing-box version 2>/dev/null | head -n 1 | tr -d '\\r\\n'
+    return
+  fi
+
+  echo ""
+}
+
+cpu_usage_percent() {
+  if [[ ! -r /proc/stat ]]; then
+    echo "null"
+    return
+  fi
+
+  local user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1
+  local user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2
+  read -r _ user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1 _ < /proc/stat || {
+    echo "null"
+    return
+  }
+
+  sleep 0.2
+
+  read -r _ user2 nice2 system2 idle2 iowait2 irq2 softirq2 steal2 _ < /proc/stat || {
+    echo "null"
+    return
+  }
+
+  local total1 total2 idle_total1 idle_total2 total_delta idle_delta usage_x100
+  total1=$((user1 + nice1 + system1 + idle1 + iowait1 + irq1 + softirq1 + steal1))
+  total2=$((user2 + nice2 + system2 + idle2 + iowait2 + irq2 + softirq2 + steal2))
+  idle_total1=$((idle1 + iowait1))
+  idle_total2=$((idle2 + iowait2))
+  total_delta=$((total2 - total1))
+  idle_delta=$((idle_total2 - idle_total1))
+
+  if [[ "$total_delta" -le 0 ]]; then
+    echo "null"
+    return
+  fi
+
+  usage_x100=$(( (10000 * (total_delta - idle_delta)) / total_delta ))
+  awk "BEGIN { printf \\"%.2f\\", $usage_x100 / 100 }"
+}
+
+memory_stats() {
+  if [[ ! -r /proc/meminfo ]]; then
+    echo "null null null"
+    return
+  fi
+
+  local total_kb available_kb used_kb used_mb total_mb usage_x100 usage_percent
+  total_kb="$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)"
+  available_kb="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
+
+  if [[ -z "$total_kb" || -z "$available_kb" || "$total_kb" -le 0 ]]; then
+    echo "null null null"
+    return
+  fi
+
+  used_kb=$((total_kb - available_kb))
+  if [[ "$used_kb" -lt 0 ]]; then
+    used_kb=0
+  fi
+
+  used_mb=$((used_kb / 1024))
+  total_mb=$((total_kb / 1024))
+  usage_x100=$(( (10000 * used_kb) / total_kb ))
+  usage_percent="$(awk "BEGIN { printf \\"%.2f\\", $usage_x100 / 100 }")"
+
+  echo "$used_mb $total_mb $usage_percent"
+}
+
+build_heartbeat_payload() {
+  local current_version deploy_info protocol_version error_message cpu_usage
+  local memory_used memory_total memory_usage
+  local deploy_json protocol_json error_json
+
+  current_version="$(read_current_version)"
+  deploy_info="applied_version=v$current_version"
+  protocol_version="$(detect_protocol_app_version)"
+  error_message="$(read_last_error)"
+  cpu_usage="$(cpu_usage_percent)"
+  read -r memory_used memory_total memory_usage <<< "$(memory_stats)"
+
+  deploy_json="$(json_escape "$deploy_info")"
+  protocol_json="$(json_escape "$protocol_version")"
+  error_json="$(json_escape "$error_message")"
+
+  echo "{\\"node_id\\":\\"$NODE_ID\\",\\"deploy_info\\":\\"$deploy_json\\",\\"protocol_app_version\\":\\"$protocol_json\\",\\"error_message\\":\\"$error_json\\",\\"cpu_usage_percent\\":$cpu_usage,\\"memory_used_mb\\":$memory_used,\\"memory_total_mb\\":$memory_total,\\"memory_usage_percent\\":$memory_usage}"
+}
+
+heartbeat_once() {
+  local payload
+  payload="$(build_heartbeat_payload)"
+
+  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/heartbeat" \
+    -H "X-Node-Token: $NODE_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$payload" >/dev/null; then
+    return 0
+  fi
+
+  set_last_error "heartbeat report failed"
+  return 1
+}
+
 json_number_field() {
   local key="$1"
   local payload="$2"
-  echo "$payload" | tr -d '\\r\\n' | grep -o "\"$key\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
+  echo "$payload" | tr -d '\\r\\n' | grep -o "\\\"$key\\\":[0-9][0-9]*" | head -n 1 | grep -o "[0-9][0-9]*"
 }
 
 json_bool_field() {
   local key="$1"
   local payload="$2"
-  if echo "$payload" | tr -d '\\r\\n' | grep -q "\"$key\":true"; then
+  if echo "$payload" | tr -d '\\r\\n' | grep -q "\\\"$key\\\":true"; then
     echo "true"
     return
   fi
@@ -163,6 +307,7 @@ flush_pending_events() {
     return 0
   fi
 
+  set_last_error "pending events flush failed"
   return 1
 }
 
@@ -171,6 +316,7 @@ apply_target_version() {
 
   if [[ -x "$APPLY_HOOK" ]]; then
     if ! "$APPLY_HOOK" "$target_version"; then
+      set_last_error "release apply failed"
       enqueue_apply_event "failed" "$target_version" "release apply failed"
       return 1
     fi
@@ -178,9 +324,11 @@ apply_target_version() {
 
   if echo "$target_version" > "$VERSION_FILE"; then
     enqueue_apply_event "ok" "$target_version" "release applied"
+    clear_last_error
     return 0
   fi
 
+  set_last_error "release apply failed"
   enqueue_apply_event "failed" "$target_version" "release apply failed"
   return 1
 }
@@ -194,20 +342,26 @@ reconcile_once() {
   current_version="$(read_current_version)"
 
   response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
-    -H "X-Node-Token: $NODE_TOKEN")" || return 1
+    -H "X-Node-Token: $NODE_TOKEN")" || {
+    set_last_error "reconcile request failed"
+    return 1
+  }
 
   desired_version="$(json_number_field "desired_version" "$response")"
   needs_update="$(json_bool_field "needs_update" "$response")"
 
   if [[ "$needs_update" != "true" ]]; then
+    clear_last_error
     return 0
   fi
 
   if [[ -z "$desired_version" ]]; then
+    set_last_error "invalid reconcile response"
     return 1
   fi
 
   if [[ "$desired_version" -le "$current_version" ]]; then
+    clear_last_error
     return 0
   fi
 
@@ -216,8 +370,7 @@ reconcile_once() {
 
 heartbeat_loop() {
   while true; do
-    curl -fsS --max-time 10 "$API_BASE/agent/heartbeat?node_id=$NODE_ID" \
-      -H "X-Node-Token: $NODE_TOKEN" >/dev/null || true
+    heartbeat_once || true
     sleep "$HEARTBEAT_INTERVAL"
   done
 }

@@ -163,6 +163,18 @@ function copyValue(text: string, label: string): void {
   toastStore.push(`${label} 已复制`, 'success')
 }
 
+function formatPercent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '-'
+  return `${value.toFixed(1)}%`
+}
+
+function formatMemorySummary(node: NodeRecord): string {
+  if (node.memory_used_mb === null || node.memory_total_mb === null || node.memory_usage_percent === null) {
+    return '-'
+  }
+  return `${node.memory_used_mb.toFixed(0)} / ${node.memory_total_mb.toFixed(0)} MB (${node.memory_usage_percent.toFixed(1)}%)`
+}
+
 onMounted(loadNodesData)
 </script>
 
@@ -239,6 +251,12 @@ onMounted(loadNodesData)
       <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
       <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
       <div>节点 Token：{{ detailNode.token || '-' }}</div>
+      <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
+      <div>协议应用版本：{{ detailNode.protocol_app_version || '-' }}</div>
+      <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
+      <div>CPU 使用率：{{ formatPercent(detailNode.cpu_usage_percent) }}</div>
+      <div>内存占用：{{ formatMemorySummary(detailNode) }}</div>
+      <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
       <button class="btn btn-secondary" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
       <template v-if="detailInstallCommand">
         <div class="muted">VPS 安装命令</div>
