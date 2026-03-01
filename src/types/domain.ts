@@ -1,4 +1,5 @@
 export type NodeKind = 'vps' | 'edge'
+export type TemplateEngine = 'sing-box' | 'xray'
 
 export interface ArtifactSubscriptionOutbound {
   protocol: string
@@ -50,6 +51,7 @@ export interface NodeRecord {
   memory_total_mb: number | null
   memory_usage_percent: number | null
   heartbeat_reported_at: string | null
+  applied_template_ids: string[]
   target_artifact: {
     id: string
     rev: number
@@ -81,6 +83,7 @@ export interface TemplateRecord {
   id: string
   name: string
   kind: 'builtin' | 'custom'
+  engine: TemplateEngine
   protocol: string
   transport: string
   tls_mode: string
@@ -101,36 +104,17 @@ export interface SubscriptionRecord {
   updated_at: string
 }
 
-export interface ReleaseRecord {
-  id: string
-  mode: 'direct_apply' | 'artifact_apply'
-  node_ids: string[]
-  template_ids: string[]
-  template_names: string[]
-  summary: string
-  params: Record<string, unknown>
-  results: Array<{
-    node_id: string
-    node_name?: string
-    status: 'queued' | 'failed'
-    target_version?: number
-    artifact_id?: string
-    artifact_sha256?: string
-    engine?: string
-    reason?: string
-  }>
-  created_at: string
-}
-
 export interface RegistryOption {
   key: string
   label: string
 }
 
 export interface TemplateRegistry {
+  engines: RegistryOption[]
   protocols: RegistryOption[]
   transports: RegistryOption[]
   tls_modes: RegistryOption[]
+  node_types: RegistryOption[]
 }
 
 export interface SystemStatus {

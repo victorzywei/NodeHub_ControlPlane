@@ -1,11 +1,11 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { createTemplate, deleteTemplate, getTemplateRegistry, listTemplates, updateTemplate } from '@/api/services/templates'
-import type { TemplateRecord, TemplateRegistry } from '@/types/domain'
+import type { NodeKind, TemplateRecord, TemplateRegistry } from '@/types/domain'
 import type { TemplateParamField } from '@/utils/templateParams'
 import { generateSecretValue, getPresetTemplateParamFields, valueToInput } from '@/utils/templateParams'
 import { useToastStore } from '@/stores/toast'
@@ -20,9 +20,11 @@ const loading = ref(false)
 const keyword = ref('')
 const templates = ref<TemplateRecord[]>([])
 const registry = ref<TemplateRegistry>({
+  engines: [],
   protocols: [],
   transports: [],
   tls_modes: [],
+  node_types: [],
 })
 
 const editorOpen = ref(false)
@@ -34,9 +36,11 @@ const customParamValue = ref('')
 
 const form = reactive({
   name: '',
+  engine: 'sing-box',
   protocol: '',
   transport: '',
   tls_mode: '',
+  node_types: ['vps', 'edge'] as NodeKind[],
   description: '',
 })
 
@@ -46,7 +50,11 @@ const filteredTemplates = computed(() => {
   if (!keyword.value.trim()) return templates.value
   const text = keyword.value.toLowerCase()
   return templates.value.filter((item) => {
-    return item.name.toLowerCase().includes(text) || item.protocol.toLowerCase().includes(text)
+    return (
+      item.name.toLowerCase().includes(text) ||
+      item.protocol.toLowerCase().includes(text) ||
+      item.engine.toLowerCase().includes(text)
+    )
   })
 })
 
@@ -148,17 +156,23 @@ async function loadData(): Promise<void> {
   }
 }
 
-function openCreate(): void {
-  editorMode.value = 'create'
-  editingTemplate.value = null
+function resetCreateForm(): void {
   form.name = ''
+  form.engine = registry.value.engines[0]?.key || 'sing-box'
   form.protocol = registry.value.protocols[0]?.key || ''
   form.transport = registry.value.transports[0]?.key || ''
   form.tls_mode = registry.value.tls_modes[0]?.key || ''
+  form.node_types = registry.value.node_types.map((item) => item.key as NodeKind)
   form.description = ''
   syncDefaultsForm({})
   customParamKey.value = ''
   customParamValue.value = ''
+}
+
+function openCreate(): void {
+  editorMode.value = 'create'
+  editingTemplate.value = null
+  resetCreateForm()
   editorOpen.value = true
 }
 
@@ -166,14 +180,24 @@ function openEdit(template: TemplateRecord): void {
   editorMode.value = 'edit'
   editingTemplate.value = template
   form.name = template.name
+  form.engine = template.engine
   form.protocol = template.protocol
   form.transport = template.transport
   form.tls_mode = template.tls_mode
+  form.node_types = template.node_types.length > 0 ? [...template.node_types] : ['vps', 'edge']
   form.description = template.description
   syncDefaultsForm(template.defaults || {})
   customParamKey.value = ''
   customParamValue.value = ''
   editorOpen.value = true
+}
+
+function toggleNodeType(nodeType: NodeKind): void {
+  if (form.node_types.includes(nodeType)) {
+    form.node_types = form.node_types.filter((item) => item !== nodeType)
+    return
+  }
+  form.node_types = [...form.node_types, nodeType]
 }
 
 function addCustomParam(): void {
@@ -211,38 +235,48 @@ async function saveTemplate(): Promise<void> {
       return
     }
 
+    if (form.node_types.length === 0) {
+      toastStore.push('请至少选择一个节点类型', 'warning')
+      return
+    }
+
+    if (form.engine === 'xray' && form.protocol === 'hysteria2') {
+      toastStore.push('xray 暂不支持 hysteria2 协议', 'warning')
+      return
+    }
+
     for (const field of presetParamFields.value) {
       const val = defaults[field.key]
       if (val === undefined || val === '') {
-        toastStore.push(`参数 ${field.label || field.key} 尚未配置或为空`, 'warning')
+        toastStore.push(`参数 ${field.label || field.key} 未配置`, 'warning')
         return
       }
 
       if (field.key === 'port') {
         const portNum = Number(val)
-        if (!Number.isInteger(portNum) || portNum < 0 || portNum > 65536) {
-          toastStore.push(`端口必须为 0 - 65536 的整数`, 'warning')
+        if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+          toastStore.push('端口必须是 1 - 65535 的整数', 'warning')
           return
         }
       }
     }
 
+    const payload = {
+      name: form.name.trim(),
+      engine: form.engine,
+      protocol: form.protocol,
+      transport: form.transport,
+      tls_mode: form.tls_mode,
+      node_types: form.node_types,
+      description: form.description.trim(),
+      defaults,
+    }
+
     if (editorMode.value === 'create') {
-      await createTemplate({
-        name: form.name.trim(),
-        protocol: form.protocol,
-        transport: form.transport,
-        tls_mode: form.tls_mode,
-        description: form.description.trim(),
-        defaults,
-      })
+      await createTemplate(payload)
       toastStore.push('模板已创建', 'success')
     } else if (editingTemplate.value) {
-      await updateTemplate(editingTemplate.value.id, {
-        name: form.name.trim(),
-        description: form.description.trim(),
-        defaults,
-      })
+      await updateTemplate(editingTemplate.value.id, payload)
       toastStore.push('模板已更新', 'success')
     }
 
@@ -274,10 +308,7 @@ watch(
     const oldTrans = oldValues?.[1] || ''
     const oldTls = oldValues?.[2] || ''
 
-    // 记录上一组合的默认参数，切换组合时需将它们清理掉，避免残留在表单中变成自定义参数
-    const oldPresetKeys = new Set(
-      getPresetTemplateParamFields(oldProto, oldTrans, oldTls).map((f) => f.key)
-    )
+    const oldPresetKeys = new Set(getPresetTemplateParamFields(oldProto, oldTrans, oldTls).map((field) => field.key))
 
     const nextSource: Record<string, unknown> = {}
     Object.keys(defaultsForm).forEach((key) => {
@@ -296,17 +327,18 @@ onMounted(loadData)
 <template>
   <FilterBar>
     <input v-model="keyword" class="input" style="max-width: 260px" placeholder="搜索模板" />
-    <button class="btn btn-primary" style="margin-left: auto" @click="openCreate">新建自定义模板</button>
+    <button class="btn btn-primary" style="margin-left: auto" @click="openCreate">新建模板</button>
   </FilterBar>
 
   <DataGrid title="内置模板">
     <thead>
       <tr>
         <th>名称</th>
+        <th>引擎</th>
         <th>协议</th>
         <th>传输</th>
         <th>TLS</th>
-        <th>网络</th>
+        <th>可用节点</th>
         <th>说明</th>
         <th>操作</th>
       </tr>
@@ -314,18 +346,16 @@ onMounted(loadData)
     <tbody>
       <tr v-for="item in builtinRows" :key="item.id">
         <td>{{ item.name }}</td>
+        <td>{{ item.engine }}</td>
         <td>{{ item.protocol }}</td>
         <td>{{ item.transport }}</td>
         <td>{{ item.tls_mode }}</td>
-        <td>
-          <span v-if="['ws', 'grpc'].includes(item.transport)" class="badge success">支持 CDN</span>
-          <span v-else class="badge warning">仅直连</span>
-        </td>
+        <td>{{ item.node_types.join(', ') || '-' }}</td>
         <td class="muted">{{ item.description || '-' }}</td>
         <td><button class="btn btn-secondary" @click="openEdit(item)">编辑参数</button></td>
       </tr>
       <tr v-if="!loading && builtinRows.length === 0">
-        <td colspan="7" class="muted">暂无内置模板</td>
+        <td colspan="8" class="muted">暂无内置模板</td>
       </tr>
     </tbody>
   </DataGrid>
@@ -334,24 +364,21 @@ onMounted(loadData)
     <thead>
       <tr>
         <th>名称</th>
+        <th>引擎</th>
         <th>协议</th>
         <th>传输</th>
         <th>TLS</th>
-        <th>网络</th>
-        <th>兼容节点</th>
+        <th>可用节点</th>
         <th>操作</th>
       </tr>
     </thead>
     <tbody>
       <tr v-for="item in customRows" :key="item.id">
         <td>{{ item.name }}</td>
+        <td>{{ item.engine }}</td>
         <td>{{ item.protocol }}</td>
         <td>{{ item.transport }}</td>
         <td>{{ item.tls_mode }}</td>
-        <td>
-          <span v-if="['ws', 'grpc'].includes(item.transport)" class="badge success">支持 CDN</span>
-          <span v-else class="badge warning">仅直连</span>
-        </td>
         <td>{{ item.node_types.join(', ') || '-' }}</td>
         <td><button class="btn btn-secondary" @click="openEdit(item)">编辑</button></td>
       </tr>
@@ -365,6 +392,13 @@ onMounted(loadData)
     <label>
       模板名称
       <input v-model="form.name" class="input" />
+    </label>
+
+    <label>
+      配置引擎
+      <select v-model="form.engine" class="select">
+        <option v-for="item in registry.engines" :key="item.key" :value="item.key">{{ item.label }}</option>
+      </select>
     </label>
 
     <label>
@@ -388,6 +422,22 @@ onMounted(loadData)
       </select>
     </label>
 
+    <section class="panel panel-pad" style="display: grid; gap: 8px">
+      <strong>适用节点</strong>
+      <label
+        v-for="nodeType in registry.node_types"
+        :key="nodeType.key"
+        style="display: flex; align-items: center; gap: 8px"
+      >
+        <input
+          type="checkbox"
+          :checked="form.node_types.includes(nodeType.key as NodeKind)"
+          @change="toggleNodeType(nodeType.key as NodeKind)"
+        />
+        <span>{{ nodeType.label }}</span>
+      </label>
+    </section>
+
     <label>
       描述
       <input v-model="form.description" class="input" />
@@ -399,12 +449,7 @@ onMounted(loadData)
       <label v-for="field in allParamFields" :key="field.key" style="display: grid; gap: 6px">
         <span style="font-weight: 700">{{ field.label }}</span>
         <div style="display: flex; gap: 8px; align-items: center">
-          <select
-            v-if="field.type === 'select'"
-            v-model="defaultsForm[field.key]"
-            class="select"
-            style="flex: 1"
-          >
+          <select v-if="field.type === 'select'" v-model="defaultsForm[field.key]" class="select" style="flex: 1">
             <option v-for="option in field.options || []" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
@@ -416,8 +461,8 @@ onMounted(loadData)
             class="input"
             style="flex: 1"
             :type="field.type === 'number' ? 'number' : 'text'"
-            :min="field.key === 'port' ? 0 : undefined"
-            :max="field.key === 'port' ? 65536 : undefined"
+            :min="field.key === 'port' ? 1 : undefined"
+            :max="field.key === 'port' ? 65535 : undefined"
             :step="field.key === 'port' ? 1 : undefined"
             :placeholder="field.placeholder || ''"
           />
@@ -436,16 +481,12 @@ onMounted(loadData)
         </div>
       </div>
 
-      <div class="muted" style="font-size: 12px">可枚举参数自动使用下拉框，其余参数使用输入框。</div>
+      <div class="muted" style="font-size: 12px">可枚举参数自动使用下拉框，其他参数使用输入框。</div>
     </article>
 
     <div style="display: flex; gap: 8px">
       <button class="btn btn-primary" @click="saveTemplate">保存</button>
-      <button
-        v-if="editorMode === 'edit'"
-        class="btn btn-danger"
-        @click="confirmDelete = true"
-      >
+      <button v-if="editorMode === 'edit'" class="btn btn-danger" @click="confirmDelete = true">
         {{ editingTemplate?.kind === 'builtin' ? '重置为默认' : '删除模板' }}
       </button>
     </div>

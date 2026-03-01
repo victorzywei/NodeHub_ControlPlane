@@ -1,11 +1,22 @@
 ﻿export const APP_VERSION = '2.0.0'
 export const ONLINE_WINDOW_MS = 11 * 60 * 1000
 
+export const NODE_TYPE_OPTIONS = [
+  { key: 'vps', label: 'VPS' },
+  { key: 'edge', label: 'Edge' },
+]
+
+export const TEMPLATE_ENGINES = [
+  { key: 'sing-box', label: 'sing-box' },
+  { key: 'xray', label: 'xray' },
+]
+
 export const BUILTIN_TEMPLATES = [
   {
     id: 'tpl_builtin_vless_reality_tcp',
     kind: 'builtin',
     name: 'VLESS + Reality + TCP',
+    engine: 'sing-box',
     protocol: 'vless',
     transport: 'tcp',
     tls_mode: 'reality',
@@ -23,6 +34,7 @@ export const BUILTIN_TEMPLATES = [
     id: 'tpl_builtin_hysteria2_udp_tls',
     kind: 'builtin',
     name: 'Hysteria2',
+    engine: 'sing-box',
     protocol: 'hysteria2',
     transport: 'udp',
     tls_mode: 'tls',
@@ -39,6 +51,7 @@ export const BUILTIN_TEMPLATES = [
     id: 'tpl_builtin_ss2022_tcp',
     kind: 'builtin',
     name: 'Shadowsocks 2022',
+    engine: 'sing-box',
     protocol: 'shadowsocks2022',
     transport: 'tcp',
     tls_mode: 'none',
@@ -54,6 +67,7 @@ export const BUILTIN_TEMPLATES = [
     id: 'tpl_builtin_vless_ws_tls',
     kind: 'builtin',
     name: 'VLESS + WS + TLS',
+    engine: 'sing-box',
     protocol: 'vless',
     transport: 'ws',
     tls_mode: 'tls',
@@ -69,6 +83,7 @@ export const BUILTIN_TEMPLATES = [
     id: 'tpl_builtin_trojan_tcp_tls',
     kind: 'builtin',
     name: 'Trojan + TCP + TLS',
+    engine: 'sing-box',
     protocol: 'trojan',
     transport: 'tcp',
     tls_mode: 'tls',
@@ -83,6 +98,7 @@ export const BUILTIN_TEMPLATES = [
 ]
 
 export const TEMPLATE_REGISTRY = {
+  engines: TEMPLATE_ENGINES,
   protocols: [
     { key: 'vless', label: 'VLESS' },
     { key: 'trojan', label: 'Trojan' },
@@ -101,4 +117,5 @@ export const TEMPLATE_REGISTRY = {
     { key: 'reality', label: 'Reality' },
     { key: 'none', label: 'None' },
   ],
+  node_types: NODE_TYPE_OPTIONS,
 }

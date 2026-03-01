@@ -3,8 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
 import { listNodes } from '@/api/services/nodes'
 import { listTemplates } from '@/api/services/templates'
-import { listReleases } from '@/api/services/releases'
-import type { NodeRecord, ReleaseRecord } from '@/types/domain'
+import type { NodeRecord } from '@/types/domain'
 import { formatDateTime, percent } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
@@ -12,28 +11,22 @@ const toastStore = useToastStore()
 
 const loading = ref(true)
 const nodes = ref<NodeRecord[]>([])
-const releases = ref<ReleaseRecord[]>([])
 const templateCount = ref(0)
 
 const onlineRate = computed(() => {
   if (nodes.value.length === 0) return 0
-  return nodes.value.filter((n) => n.online).length / nodes.value.length
+  return nodes.value.filter((item) => item.online).length / nodes.value.length
 })
 
-const failedAlerts = computed(() => nodes.value.filter((n) => n.last_release_status === 'failed').length)
-const latestRelease = computed(() => releases.value[0] || null)
+const failedAlerts = computed(() => nodes.value.filter((item) => item.last_release_status === 'failed').length)
+const pendingApply = computed(() => nodes.value.filter((item) => item.target_version > item.current_version).length)
 
 async function load(): Promise<void> {
   loading.value = true
   try {
-    const [nodeRows, templateRows, releaseRows] = await Promise.all([
-      listNodes(),
-      listTemplates(),
-      listReleases(),
-    ])
+    const [nodeRows, templateRows] = await Promise.all([listNodes(), listTemplates()])
     nodes.value = nodeRows
     templateCount.value = templateRows.length
-    releases.value = releaseRows
   } catch {
     toastStore.push('总览数据加载失败', 'danger')
   } finally {
@@ -55,8 +48,8 @@ onMounted(load)
       <div class="stat-value">{{ percent(onlineRate) }}</div>
     </article>
     <article class="stat-card">
-      <div class="muted">最近操作</div>
-      <div class="stat-value" style="font-size: 20px">{{ latestRelease ? formatDateTime(latestRelease.created_at) : '-' }}</div>
+      <div class="muted">待下发节点</div>
+      <div class="stat-value">{{ pendingApply }}</div>
     </article>
     <article class="stat-card">
       <div class="muted">失败告警</div>
@@ -84,7 +77,7 @@ onMounted(load)
               {{ node.online ? '在线' : '离线' }}
             </span>
           </td>
-          <td>v{{ node.target_version }}</td>
+          <td>v{{ node.current_version }} -> v{{ node.target_version }}</td>
           <td>{{ formatDateTime(node.last_seen_at) }}</td>
         </tr>
         <tr v-if="!loading && nodes.length === 0">
@@ -96,8 +89,8 @@ onMounted(load)
     <section class="panel panel-pad" style="display: grid; gap: 10px; align-content: start">
       <h3 style="margin: 0">容量概览</h3>
       <div class="muted">配置模板总数：{{ templateCount }}</div>
-      <div class="muted">最近操作记录：{{ releases.length }}</div>
       <div class="muted">节点总数：{{ nodes.length }}</div>
+      <div class="muted">待下发数量：{{ pendingApply }}</div>
       <div class="muted">最后刷新：{{ new Date().toLocaleTimeString('zh-CN', { hour12: false }) }}</div>
     </section>
   </section>

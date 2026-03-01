@@ -13,7 +13,6 @@ const navItems: NavItem[] = [
   { name: 'overview', label: '总览', to: '/overview' },
   { name: 'nodes', label: '节点', to: '/nodes' },
   { name: 'templates', label: '配置模板', to: '/templates' },
-  { name: 'release', label: '发布中心', to: '/release' },
   { name: 'subscriptions', label: '订阅', to: '/subscriptions' },
   { name: 'system', label: '系统', to: '/system' },
 ]

@@ -1,5 +1,6 @@
 ﻿import { requireAdmin } from '../../_lib/auth.js'
 import { ONLINE_WINDOW_MS } from '../../_lib/constants.js'
+import { normalizeNodeTemplateIds, queueNodeTemplateApply } from '../../_lib/node-apply.js'
 import { KEY, indexRemove, indexUpsert, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
@@ -44,6 +45,7 @@ function normalizeNode(node) {
     memory_total_mb: Number.isFinite(memoryTotal) ? memoryTotal : null,
     memory_usage_percent: Number.isFinite(memoryUsage) ? memoryUsage : null,
     heartbeat_reported_at: node.heartbeat_reported_at ? String(node.heartbeat_reported_at) : null,
+    applied_template_ids: Array.isArray(node.applied_template_ids) ? node.applied_template_ids.map((item) => String(item)) : [],
     target_version: targetVersion,
     current_version: currentVersion,
     target_artifact: targetArtifact,
@@ -74,14 +76,35 @@ export async function onRequestPatch({ request, env, params }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))
-  const fields = ['name', 'region', 'tags', 'entry_cdn', 'entry_direct', 'entry_ip', 'github_mirror', 'cf_api_token']
-  fields.forEach((field) => {
+  const stringFields = ['name', 'region', 'entry_cdn', 'entry_direct', 'entry_ip', 'github_mirror', 'cf_api_token']
+
+  stringFields.forEach((field) => {
     if (body[field] !== undefined) {
-      node[field] = field === 'tags' ? body.tags : String(body[field])
+      node[field] = String(body[field])
     }
   })
 
-  node.updated_at = new Date().toISOString()
+  if (body.tags !== undefined) {
+    node.tags = Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : []
+  }
+
+  const nowIso = new Date().toISOString()
+  if (body.applied_template_ids !== undefined) {
+    const templateIds = normalizeNodeTemplateIds(body.applied_template_ids)
+    try {
+      await queueNodeTemplateApply({
+        kv,
+        node,
+        templateIds,
+        nowIso,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'failed to apply templates'
+      return fail('VALIDATION', message, 400)
+    }
+  }
+
+  node.updated_at = nowIso
   await kvPutJson(kv, KEY.node(node.id), node)
   await indexUpsert(kv, KEY.idxNodes, { id: node.id, name: node.name, updated_at: node.updated_at })
 

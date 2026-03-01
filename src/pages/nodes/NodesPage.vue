@@ -1,11 +1,12 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { createNode, deleteNode, getNode, listNodes, nodeInstallCommand, updateNode } from '@/api/services/nodes'
-import type { NodeRecord, NodeKind } from '@/types/domain'
+import { listTemplates } from '@/api/services/templates'
+import type { NodeKind, NodeRecord, TemplateRecord } from '@/types/domain'
 import { formatRelative } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
@@ -13,6 +14,7 @@ const toastStore = useToastStore()
 
 const loading = ref(false)
 const nodes = ref<NodeRecord[]>([])
+const templates = ref<TemplateRecord[]>([])
 const keyword = ref('')
 const typeFilter = ref<'all' | NodeKind>('all')
 const onlineFilter = ref<'all' | 'online' | 'offline'>('all')
@@ -27,6 +29,7 @@ const detailUninstallCommand = ref('')
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingId = ref('')
+const originalAppliedTemplateIds = ref<string[]>([])
 const form = reactive({
   name: '',
   node_type: 'vps' as NodeKind,
@@ -37,9 +40,18 @@ const form = reactive({
   entry_ip: '',
   github_mirror: '',
   cf_api_token: '',
+  applied_template_ids: [] as string[],
 })
 
 const confirmBatchDelete = ref(false)
+
+const templateNameMap = computed(() => {
+  const map = new Map<string, string>()
+  templates.value.forEach((item) => {
+    map.set(item.id, item.name)
+  })
+  return map
+})
 
 const filteredRows = computed(() => {
   return nodes.value.filter((node) => {
@@ -57,6 +69,18 @@ const filteredRows = computed(() => {
   })
 })
 
+const availableTemplates = computed(() => {
+  return templates.value.filter((item) => item.node_types.includes(form.node_type))
+})
+
+const selectedTemplateEngine = computed(() => {
+  for (const id of form.applied_template_ids) {
+    const template = templates.value.find((item) => item.id === id)
+    if (template) return template.engine
+  }
+  return ''
+})
+
 function toPayload(): Partial<NodeRecord> {
   return {
     name: form.name.trim(),
@@ -71,6 +95,7 @@ function toPayload(): Partial<NodeRecord> {
     entry_ip: form.entry_ip.trim(),
     github_mirror: form.github_mirror.trim(),
     cf_api_token: form.cf_api_token.trim(),
+    applied_template_ids: [...form.applied_template_ids],
   }
 }
 
@@ -84,14 +109,40 @@ function fillForm(node?: NodeRecord): void {
   form.entry_ip = node?.entry_ip || ''
   form.github_mirror = node?.github_mirror || ''
   form.cf_api_token = node?.cf_api_token || ''
+  form.applied_template_ids = Array.isArray(node?.applied_template_ids) ? [...node.applied_template_ids] : []
+  originalAppliedTemplateIds.value = [...form.applied_template_ids]
+}
+
+function sameTemplateSelection(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const aSet = new Set(a)
+  for (const item of b) {
+    if (!aSet.has(item)) return false
+  }
+  return true
+}
+
+function sanitizeAppliedTemplateSelection(): void {
+  const allowed = new Set(availableTemplates.value.map((item) => item.id))
+  form.applied_template_ids = form.applied_template_ids.filter((id) => allowed.has(id))
 }
 
 async function loadNodesData(): Promise<void> {
   loading.value = true
   try {
-    nodes.value = await listNodes()
-  } catch {
-    toastStore.push('节点列表加载失败', 'danger')
+    const [nodeResult, templateResult] = await Promise.allSettled([listNodes(), listTemplates()])
+
+    if (nodeResult.status === 'fulfilled') {
+      nodes.value = nodeResult.value
+    } else {
+      toastStore.push('节点列表加载失败', 'danger')
+    }
+
+    if (templateResult.status === 'fulfilled') {
+      templates.value = templateResult.value
+    } else {
+      toastStore.push('模板列表加载失败', 'warning')
+    }
   } finally {
     loading.value = false
   }
@@ -107,6 +158,7 @@ function startCreate(): void {
   editorMode.value = 'create'
   editingId.value = ''
   fillForm()
+  sanitizeAppliedTemplateSelection()
   editorOpen.value = true
 }
 
@@ -114,7 +166,22 @@ function startEdit(node: NodeRecord): void {
   editorMode.value = 'edit'
   editingId.value = node.id
   fillForm(node)
+  sanitizeAppliedTemplateSelection()
   editorOpen.value = true
+}
+
+function toggleTemplate(id: string): void {
+  if (form.applied_template_ids.includes(id)) {
+    form.applied_template_ids = form.applied_template_ids.filter((item) => item !== id)
+    return
+  }
+  const template = templates.value.find((item) => item.id === id)
+  if (!template) return
+  if (selectedTemplateEngine.value && selectedTemplateEngine.value !== template.engine) {
+    toastStore.push('同一个节点只能选择同一引擎的模板', 'warning')
+    return
+  }
+  form.applied_template_ids = [...form.applied_template_ids, id]
 }
 
 async function saveNode(): Promise<void> {
@@ -124,11 +191,16 @@ async function saveNode(): Promise<void> {
   }
 
   try {
+    const payload = toPayload()
+    if (editorMode.value === 'edit' && sameTemplateSelection(form.applied_template_ids, originalAppliedTemplateIds.value)) {
+      delete payload.applied_template_ids
+    }
+
     if (editorMode.value === 'create') {
-      await createNode(toPayload() as Partial<NodeRecord> & Pick<NodeRecord, 'name' | 'node_type'>)
+      await createNode(payload as Partial<NodeRecord> & Pick<NodeRecord, 'name' | 'node_type'>)
       toastStore.push('节点已创建', 'success')
     } else {
-      await updateNode(editingId.value, toPayload())
+      await updateNode(editingId.value, payload)
       toastStore.push('节点已更新', 'success')
     }
     editorOpen.value = false
@@ -148,8 +220,7 @@ async function openDetail(nodeId: string): Promise<void> {
     if (node.node_type === 'vps') {
       const install = await nodeInstallCommand(node.id)
       detailInstallCommand.value = install.command
-      
-      // Generate uninstall command
+
       const baseUrl = window.location.origin
       detailUninstallCommand.value = `URL='${baseUrl}/agent/uninstall'; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s -- --remove-binaries --remove-certs --force`
     }
@@ -163,7 +234,7 @@ async function runBatchDelete(): Promise<void> {
   if (ids.length === 0) return
 
   const results = await Promise.allSettled(ids.map((id) => deleteNode(id)))
-  const successCount = results.filter((r) => r.status === 'fulfilled').length
+  const successCount = results.filter((item) => item.status === 'fulfilled').length
   selected.value = new Set()
   toastStore.push(`批量删除完成，成功 ${successCount}/${ids.length}`, successCount === ids.length ? 'success' : 'warning')
   await loadNodesData()
@@ -186,6 +257,21 @@ function formatMemorySummary(node: NodeRecord): string {
   }
   return `${node.memory_used_mb.toFixed(0)} / ${node.memory_total_mb.toFixed(0)} MB (${node.memory_usage_percent.toFixed(1)}%)`
 }
+
+function appliedTemplatesText(node: NodeRecord): string {
+  if (!Array.isArray(node.applied_template_ids) || node.applied_template_ids.length === 0) return '-'
+  return node.applied_template_ids
+    .map((id) => templateNameMap.value.get(id) || id)
+    .join(', ')
+}
+
+watch(
+  () => form.node_type,
+  () => {
+    if (!editorOpen.value) return
+    sanitizeAppliedTemplateSelection()
+  },
+)
 
 onMounted(loadNodesData)
 </script>
@@ -217,6 +303,7 @@ onMounted(loadNodesData)
         <th>名称</th>
         <th>类型</th>
         <th>区域</th>
+        <th>协议应用</th>
         <th>状态</th>
         <th>版本</th>
         <th>最后在线</th>
@@ -234,6 +321,7 @@ onMounted(loadNodesData)
         </td>
         <td>{{ node.node_type }}</td>
         <td>{{ node.region || '-' }}</td>
+        <td class="muted" style="max-width: 220px">{{ appliedTemplatesText(node) }}</td>
         <td>
           <span class="badge" :class="node.online ? 'success' : 'warning'">
             {{ node.online ? '在线' : '离线' }}
@@ -249,7 +337,7 @@ onMounted(loadNodesData)
         </td>
       </tr>
       <tr v-if="!loading && filteredRows.length === 0">
-        <td colspan="8" class="muted">没有匹配节点</td>
+        <td colspan="9" class="muted">没有匹配节点</td>
       </tr>
     </tbody>
   </DataGrid>
@@ -262,6 +350,7 @@ onMounted(loadNodesData)
       <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
       <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
       <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
+      <div>协议应用：{{ appliedTemplatesText(detailNode) }}</div>
       <div>节点 Token：{{ detailNode.token || '-' }}</div>
       <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
       <div>协议应用版本：{{ detailNode.protocol_app_version || '-' }}</div>
@@ -296,7 +385,7 @@ onMounted(loadNodesData)
     </label>
     <label>
       类型
-      <select v-model="form.node_type" class="select">
+      <select v-model="form.node_type" class="select" :disabled="editorMode === 'edit'">
         <option value="vps">VPS</option>
         <option value="edge">Edge</option>
       </select>
@@ -323,12 +412,31 @@ onMounted(loadNodesData)
     </label>
     <label>
       GitHub 镜像 (可选)
-      <input v-model="form.github_mirror" class="input" placeholder="用于vps下载github的文件" />
+      <input v-model="form.github_mirror" class="input" placeholder="用于 vps 下载 github 文件" />
     </label>
     <label>
       Cloudflare API Token (可选)
-      <input v-model="form.cf_api_token" class="input" placeholder="用于申请CF证书" />
+      <input v-model="form.cf_api_token" class="input" placeholder="用于申请 CF 证书" />
     </label>
+
+    <section class="panel panel-pad" style="display: grid; gap: 10px; margin-bottom: 8px">
+      <div style="font-weight: 700">协议应用</div>
+      <div v-if="availableTemplates.length === 0" class="muted">暂无可用模板</div>
+      <label
+        v-for="template in availableTemplates"
+        :key="template.id"
+        style="display: flex; align-items: center; gap: 8px"
+      >
+        <input
+          type="checkbox"
+          :checked="form.applied_template_ids.includes(template.id)"
+          @change="toggleTemplate(template.id)"
+        />
+        <span>{{ template.name }}</span>
+        <span class="muted" style="font-size: 12px">({{ template.engine }} / {{ template.protocol }})</span>
+      </label>
+    </section>
+
     <button class="btn btn-primary" @click="saveNode">保存</button>
   </DetailDrawer>
 

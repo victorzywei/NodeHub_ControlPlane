@@ -2,12 +2,10 @@
   idxNodes: 'idx:nodes',
   idxTemplates: 'idx:templates',
   idxSubscriptions: 'idx:subscriptions',
-  idxReleases: 'idx:releases',
   node: (id) => `node:${id}`,
   template: (id) => `template:${id}`,
   templateOverride: (id) => `template_override:${id}`,
   subscription: (token) => `subscription:${token}`,
-  release: (id) => `release:${id}`,
   artifact: (id) => `artifact:${id}`,
 }
 

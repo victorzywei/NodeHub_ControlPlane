@@ -9,7 +9,7 @@ export function getTemplate(id: string): Promise<TemplateRecord> {
   return request(`/api/templates/${id}`)
 }
 
-export function createTemplate(payload: Partial<TemplateRecord> & Pick<TemplateRecord, 'name' | 'protocol' | 'transport' | 'tls_mode'>): Promise<TemplateRecord> {
+export function createTemplate(payload: Partial<TemplateRecord> & Pick<TemplateRecord, 'name' | 'engine' | 'protocol' | 'transport' | 'tls_mode'>): Promise<TemplateRecord> {
   return request('/api/templates', { method: 'POST', body: payload })
 }
 
