@@ -32,10 +32,6 @@ const selectedTemplates = ref<Set<string>>(new Set())
 const paramsJson = ref('{}')
 const LOG_PREVIEW_LIMIT = 48
 
-function hasReleaseVersion(node: NodeRecord): boolean {
-  return Number(node.target_version || 0) > 0 || Number(node.current_version || 0) > 0
-}
-
 function summarizeParams(params: Record<string, unknown>): string {
   const entries = Object.entries(params || {})
   if (entries.length === 0) return ''
@@ -119,13 +115,11 @@ function copyText(text: string, label: string): void {
   toastStore.push(`${label} copied`, 'success')
 }
 
-const releaseNodes = computed(() => nodes.value.filter(hasReleaseVersion))
-
 const filteredNodes = computed(() => {
   const text = keyword.value.trim().toLowerCase()
-  if (!text) return releaseNodes.value
+  if (!text) return nodes.value
 
-  return releaseNodes.value.filter((node) => {
+  return nodes.value.filter((node) => {
     const configText = nodeConfigSummary(node).toLowerCase()
     const logText = nodeLogSummary(node).toLowerCase()
 
@@ -319,7 +313,7 @@ onMounted(loadData)
         </td>
       </tr>
       <tr v-if="!loading && filteredNodes.length === 0">
-        <td colspan="7" class="muted">No nodes with release history</td>
+        <td colspan="7" class="muted">No nodes</td>
       </tr>
     </tbody>
   </DataGrid>
