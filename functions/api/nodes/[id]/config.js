@@ -66,8 +66,6 @@ async function buildArtifactView(kv, nodeId, artifactRef) {
       missing: true,
       config_name: '',
       config_text: '',
-      manifest_json: '',
-      manifest_env: '',
       created_at: '',
     }
   }
@@ -83,8 +81,6 @@ async function buildArtifactView(kv, nodeId, artifactRef) {
     missing: false,
     config_name: configFile.name,
     config_text: configFile.text,
-    manifest_json: String(files['manifest.json'] || ''),
-    manifest_env: String(files['manifest.env'] || ''),
     created_at: String(artifact.created_at || artifactRef.created_at || ''),
   }
 }

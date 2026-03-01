@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
@@ -17,10 +17,12 @@ const loading = ref(false)
 const pending = ref(false)
 const drawerOpen = ref(false)
 const expandedLogNodeIds = ref<Set<string>>(new Set())
+
 const configDrawerOpen = ref(false)
 const configLoading = ref(false)
 const configNodeName = ref('')
 const configDetail = ref<NodeConfigDetail | null>(null)
+const configHintMessage = ref('')
 
 const nodes = ref<NodeRecord[]>([])
 const templates = ref<TemplateRecord[]>([])
@@ -59,6 +61,13 @@ function nodeConfigSummary(node: NodeRecord): string {
       ? target.params
       : {}
   return configSummary(templateNames, params, String(target?.summary || current?.summary || ''))
+}
+
+function nodeVersionText(node: NodeRecord): string {
+  const current = Number(node.current_version || 0)
+  const target = Number(node.target_version || 0)
+  if (current <= 0 && target <= 0) return '-'
+  return `r${current} -> r${target}`
 }
 
 function nodeLogSummary(node: NodeRecord): string {
@@ -104,9 +113,30 @@ function operationResultSummary(operation: ReleaseRecord): string {
   return `success ${success} / failed ${failed}`
 }
 
+function operationFailureSummary(operation: ReleaseRecord): string {
+  const reasons = operation.results
+    .filter((item) => item.status === 'failed' && item.reason)
+    .map((item) => String(item.reason || '').trim())
+    .filter(Boolean)
+  return reasons[0] || ''
+}
+
 function configUpdatedAt(view: NodeArtifactConfigView | null): string {
   if (!view?.created_at) return '-'
   return formatDateTime(view.created_at)
+}
+
+function configRevText(view: NodeArtifactConfigView | null): string {
+  const rev = Number(view?.rev || 0)
+  return rev > 0 ? `r${rev}` : '-'
+}
+
+function protocolConfigText(view: NodeArtifactConfigView | null): string {
+  return String(view?.config_text || '').trim()
+}
+
+function hasConfigView(view: NodeArtifactConfigView | null): boolean {
+  return Boolean(view && (Number(view.rev || 0) > 0 || view.sha256 || view.engine || view.config_text))
 }
 
 function copyText(text: string, label: string): void {
@@ -178,11 +208,21 @@ function toggleTemplate(id: string, compatible: boolean): void {
 async function loadData(): Promise<void> {
   loading.value = true
   try {
-    const [nodeRows, templateRows, operationRows] = await Promise.all([listNodes(), listTemplates(), listReleases()])
-    nodes.value = nodeRows
-    templates.value = templateRows
-    operations.value = operationRows
-    const validNodeIds = new Set(nodeRows.map((item) => item.id))
+    const [nodesResult, templatesResult, releasesResult] = await Promise.allSettled([
+      listNodes(),
+      listTemplates(),
+      listReleases(),
+    ])
+
+    if (nodesResult.status === 'fulfilled') nodes.value = nodesResult.value
+    if (templatesResult.status === 'fulfilled') templates.value = templatesResult.value
+    if (releasesResult.status === 'fulfilled') operations.value = releasesResult.value
+
+    if (nodesResult.status === 'rejected') toastStore.push('Failed to load nodes', 'danger')
+    if (templatesResult.status === 'rejected') toastStore.push('Failed to load templates', 'danger')
+    if (releasesResult.status === 'rejected') toastStore.push('Failed to load release history', 'warning')
+
+    const validNodeIds = new Set(nodes.value.map((item) => item.id))
     expandedLogNodeIds.value = new Set([...expandedLogNodeIds.value].filter((id) => validNodeIds.has(id)))
   } catch {
     toastStore.push('Failed to load release center data', 'danger')
@@ -231,6 +271,7 @@ async function openNodeConfig(node: NodeRecord): Promise<void> {
   configLoading.value = true
   configNodeName.value = node.name
   configDetail.value = null
+  configHintMessage.value = node.last_release_message || ''
 
   try {
     configDetail.value = await getNodeConfig(node.id)
@@ -275,7 +316,7 @@ onMounted(loadData)
           <div class="muted" style="font-size: 12px">{{ node.id }}</div>
         </td>
         <td>{{ node.node_type }}</td>
-        <td>r{{ node.current_version }} -> r{{ node.target_version }}</td>
+        <td>{{ nodeVersionText(node) }}</td>
         <td>
           <div>{{ nodeConfigSummary(node) }}</div>
           <button class="btn btn-secondary" style="margin-top: 6px; padding: 2px 10px; font-size: 12px" @click="openNodeConfig(node)">
@@ -332,7 +373,12 @@ onMounted(loadData)
         <td>{{ formatDateTime(operation.created_at) }}</td>
         <td>{{ operation.node_ids.length }}</td>
         <td>{{ operationConfigSummary(operation) }}</td>
-        <td>{{ operationResultSummary(operation) }}</td>
+        <td>
+          <div>{{ operationResultSummary(operation) }}</div>
+          <div v-if="operationFailureSummary(operation)" class="muted" style="font-size: 12px; margin-top: 4px">
+            {{ operationFailureSummary(operation) }}
+          </div>
+        </td>
       </tr>
       <tr v-if="!loading && operations.length === 0">
         <td colspan="4" class="muted">No operation history</td>
@@ -385,50 +431,50 @@ onMounted(loadData)
     <template v-else-if="configDetail">
       <article class="panel panel-pad" style="display: grid; gap: 8px; margin-bottom: 12px">
         <strong>Target (generated)</strong>
-        <div class="muted">rev: r{{ configDetail.target?.rev || 0 }} | engine: {{ configDetail.target?.engine || '-' }}</div>
+        <div class="muted">rev: {{ configRevText(configDetail.target) }} | engine: {{ configDetail.target?.engine || '-' }}</div>
         <div class="muted">sha256: {{ configDetail.target?.sha256 || '-' }}</div>
         <div class="muted">created: {{ configUpdatedAt(configDetail.target) }}</div>
         <div v-if="configDetail.target?.missing" class="badge warning">artifact missing in KV</div>
 
-        <label class="muted">manifest.json</label>
-        <textarea class="textarea" readonly :value="configDetail.target?.manifest_json || ''" style="min-height: 140px" />
-        <div style="display: flex; justify-content: flex-end">
-          <button class="btn btn-secondary" @click="copyText(configDetail.target?.manifest_json || '', 'target manifest')">
-            Copy
-          </button>
+        <div v-if="!hasConfigView(configDetail.target)" class="muted">
+          No generated artifact yet. {{ configHintMessage || '' }}
         </div>
-
-        <label class="muted">{{ configDetail.target?.config_name || 'protocol config' }}</label>
-        <textarea class="textarea" readonly :value="configDetail.target?.config_text || ''" style="min-height: 240px" />
-        <div style="display: flex; justify-content: flex-end">
-          <button class="btn btn-secondary" @click="copyText(configDetail.target?.config_text || '', 'target config')">
-            Copy
-          </button>
+        <div v-else-if="!protocolConfigText(configDetail.target)" class="muted">
+          No generated protocol config yet. {{ configHintMessage || '' }}
         </div>
+        <template v-else>
+          <label class="muted">{{ configDetail.target?.config_name || 'protocol config' }}</label>
+          <textarea class="textarea" readonly :value="protocolConfigText(configDetail.target)" style="min-height: 280px" />
+          <div style="display: flex; justify-content: flex-end">
+            <button class="btn btn-secondary" @click="copyText(protocolConfigText(configDetail.target), 'target config')">
+              Copy
+            </button>
+          </div>
+        </template>
       </article>
 
       <article class="panel panel-pad" style="display: grid; gap: 8px">
         <strong>Current (running)</strong>
-        <div class="muted">rev: r{{ configDetail.current?.rev || 0 }} | engine: {{ configDetail.current?.engine || '-' }}</div>
+        <div class="muted">rev: {{ configRevText(configDetail.current) }} | engine: {{ configDetail.current?.engine || '-' }}</div>
         <div class="muted">sha256: {{ configDetail.current?.sha256 || '-' }}</div>
         <div class="muted">created: {{ configUpdatedAt(configDetail.current) }}</div>
         <div v-if="configDetail.current?.missing" class="badge warning">artifact missing in KV</div>
 
-        <label class="muted">manifest.json</label>
-        <textarea class="textarea" readonly :value="configDetail.current?.manifest_json || ''" style="min-height: 140px" />
-        <div style="display: flex; justify-content: flex-end">
-          <button class="btn btn-secondary" @click="copyText(configDetail.current?.manifest_json || '', 'current manifest')">
-            Copy
-          </button>
+        <div v-if="!hasConfigView(configDetail.current)" class="muted">
+          No applied artifact yet.
         </div>
-
-        <label class="muted">{{ configDetail.current?.config_name || 'protocol config' }}</label>
-        <textarea class="textarea" readonly :value="configDetail.current?.config_text || ''" style="min-height: 240px" />
-        <div style="display: flex; justify-content: flex-end">
-          <button class="btn btn-secondary" @click="copyText(configDetail.current?.config_text || '', 'current config')">
-            Copy
-          </button>
+        <div v-else-if="!protocolConfigText(configDetail.current)" class="muted">
+          No applied protocol config yet.
         </div>
+        <template v-else>
+          <label class="muted">{{ configDetail.current?.config_name || 'protocol config' }}</label>
+          <textarea class="textarea" readonly :value="protocolConfigText(configDetail.current)" style="min-height: 280px" />
+          <div style="display: flex; justify-content: flex-end">
+            <button class="btn btn-secondary" @click="copyText(protocolConfigText(configDetail.current), 'current config')">
+              Copy
+            </button>
+          </div>
+        </template>
       </article>
     </template>
     <div v-else class="muted">No config data</div>

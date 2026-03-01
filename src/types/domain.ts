@@ -16,8 +16,6 @@ export interface NodeArtifactConfigView {
   missing: boolean
   config_name: string
   config_text: string
-  manifest_json: string
-  manifest_env: string
   created_at: string
 }
 
