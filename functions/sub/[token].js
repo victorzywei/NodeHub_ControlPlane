@@ -48,21 +48,23 @@ export async function onRequestGet({ request, env, params }) {
 
   const outbounds = []
   for (const node of filtered) {
-    const config = node.desired_config
-    if (!config || !Array.isArray(config.templates)) continue
+    const artifact =
+      node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
+        ? node.desired_artifact
+        : null
+    if (!artifact || !Array.isArray(artifact.subscription_outbounds)) continue
 
-    const gParams = config.params || {}
-    for (const t of config.templates) {
-      const s = { ...t.defaults, ...gParams }
+    for (const t of artifact.subscription_outbounds) {
+      const s = t.settings || {}
       const addr = String(node.entry_direct || node.entry_cdn || node.entry_ip || 'unknown').trim()
 
       outbounds.push({
-        name: config.templates.length > 1 ? `${node.name}-${t.protocol}` : node.name,
+        name: artifact.subscription_outbounds.length > 1 ? `${node.name}-${t.protocol}` : node.name,
         node,
         protocol: t.protocol,
         transport: t.transport,
         tls_mode: t.tls_mode,
-        port: s.port || 443,
+        port: Number(t.port || s.port || 443),
         address: addr,
         settings: s,
       })

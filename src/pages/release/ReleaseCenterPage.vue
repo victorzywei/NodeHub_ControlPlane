@@ -43,7 +43,7 @@ function summarizeParams(params: Record<string, unknown>): string {
 
 function configSummary(templateNames: string[], params: Record<string, unknown>, fallback = ''): string {
   const names = templateNames.map((item) => String(item || '').trim()).filter(Boolean)
-  const templateText = names.length > 0 ? names.join('、') : ''
+  const templateText = names.length > 0 ? names.join(' / ') : ''
   const paramsText = summarizeParams(params)
   if (templateText && paramsText) return `${templateText} | ${paramsText}`
   if (templateText) return templateText
@@ -51,28 +51,25 @@ function configSummary(templateNames: string[], params: Record<string, unknown>,
 }
 
 function nodeConfigSummary(node: NodeRecord): string {
-  const templateNames = Array.isArray(node.desired_config?.template_names) ? node.desired_config!.template_names : []
+  const desired = node.desired_artifact
+  const applied = node.applied_artifact
+  const templateNames = Array.isArray(desired?.template_names) ? desired.template_names : []
   const params =
-    node.desired_config?.params && typeof node.desired_config.params === 'object' && !Array.isArray(node.desired_config.params)
-      ? node.desired_config.params
+    desired?.params && typeof desired.params === 'object' && !Array.isArray(desired.params)
+      ? desired.params
       : {}
-
-  return configSummary(
-    templateNames,
-    params,
-    String(node.desired_config_summary || node.applied_config_summary || ''),
-  )
+  return configSummary(templateNames, params, String(desired?.summary || applied?.summary || ''))
 }
 
 function nodeLogSummary(node: NodeRecord): string {
   const releaseMessage = String(node.last_release_message || '').trim()
   const heartbeatError = String(node.last_heartbeat_error || '').trim()
 
-  if (node.last_release_status === 'failed') return releaseMessage || heartbeatError || '部署失败'
-  if (heartbeatError) return `心跳异常: ${heartbeatError}`
+  if (node.last_release_status === 'failed') return releaseMessage || heartbeatError || 'deploy failed'
+  if (heartbeatError) return `heartbeat error: ${heartbeatError}`
   if (releaseMessage) return releaseMessage
-  if (node.last_release_status === 'ok') return '部署成功'
-  if (node.last_release_status === 'pending') return '部署中'
+  if (node.last_release_status === 'ok') return 'deploy success'
+  if (node.last_release_status === 'pending') return 'deploy pending'
   return '-'
 }
 
@@ -98,17 +95,13 @@ function nodeLogDisplay(node: NodeRecord): string {
 }
 
 function operationConfigSummary(operation: ReleaseRecord): string {
-  return configSummary(
-    operation.template_names || [],
-    operation.params || {},
-    String(operation.summary || ''),
-  )
+  return configSummary(operation.template_names || [], operation.params || {}, String(operation.summary || ''))
 }
 
 function operationResultSummary(operation: ReleaseRecord): string {
   const success = operation.results.filter((item) => item.status === 'queued').length
   const failed = operation.results.filter((item) => item.status === 'failed').length
-  return `成功 ${success} / 失败 ${failed}`
+  return `success ${success} / failed ${failed}`
 }
 
 const releaseNodes = computed(() => nodes.value.filter(hasReleaseVersion))
@@ -144,7 +137,7 @@ const templatesWithStatus = computed(() => {
     return {
       ...template,
       compatible: unsupported.length === 0,
-      warning: unsupported.length > 0 ? `不支持: ${unsupported.join(', ')}` : '',
+      warning: unsupported.length > 0 ? `unsupported: ${unsupported.join(', ')}` : '',
     }
   })
 })
@@ -183,7 +176,7 @@ async function loadData(): Promise<void> {
     const validNodeIds = new Set(nodeRows.map((item) => item.id))
     expandedLogNodeIds.value = new Set([...expandedLogNodeIds.value].filter((id) => validNodeIds.has(id)))
   } catch {
-    toastStore.push('发布中心数据加载失败', 'danger')
+    toastStore.push('Failed to load release center data', 'danger')
   } finally {
     loading.value = false
   }
@@ -193,12 +186,12 @@ async function applyToNodes(): Promise<void> {
   if (pending.value) return
 
   if (selectedNodes.value.size === 0) {
-    toastStore.push('至少选择一个节点', 'warning')
+    toastStore.push('Select at least one node', 'warning')
     return
   }
 
   if (selectedTemplates.value.size === 0) {
-    toastStore.push('至少选择一个模板', 'warning')
+    toastStore.push('Select at least one template', 'warning')
     return
   }
 
@@ -213,12 +206,12 @@ async function applyToNodes(): Promise<void> {
 
     const success = operation.results.filter((item) => item.status === 'queued').length
     const total = operation.results.length
-    toastStore.push(`已下发配置 ${success}/${total}`, success === total ? 'success' : 'warning')
+    toastStore.push(`Release queued: ${success}/${total}`, success === total ? 'success' : 'warning')
 
     drawerOpen.value = false
     await loadData()
   } catch {
-    toastStore.push('配置下发失败，请检查参数', 'danger')
+    toastStore.push('Release creation failed, please check parameters', 'danger')
   } finally {
     pending.value = false
   }
@@ -229,20 +222,20 @@ onMounted(loadData)
 
 <template>
   <FilterBar>
-    <input v-model="keyword" class="input" style="max-width: 280px" placeholder="搜索节点或配置" />
-    <button class="btn btn-primary" style="margin-left: auto" @click="openDrawer">新增应用</button>
+    <input v-model="keyword" class="input" style="max-width: 280px" placeholder="Search nodes or config" />
+    <button class="btn btn-primary" style="margin-left: auto" @click="openDrawer">New Apply</button>
   </FilterBar>
 
-  <DataGrid title="节点配置状态">
+  <DataGrid title="Node Deployment Status">
     <thead>
       <tr>
-        <th>节点名称</th>
-        <th>类型</th>
-        <th>版本</th>
-        <th>配置</th>
-        <th>状态</th>
-        <th>最后上报</th>
-        <th>日记</th>
+        <th>Node</th>
+        <th>Type</th>
+        <th>Version</th>
+        <th>Config</th>
+        <th>Status</th>
+        <th>Last Report</th>
+        <th>Log</th>
       </tr>
     </thead>
     <tbody>
@@ -255,7 +248,16 @@ onMounted(loadData)
         <td>r{{ node.applied_version }} -> r{{ node.desired_version }}</td>
         <td>{{ nodeConfigSummary(node) }}</td>
         <td>
-          <span class="badge" :class="node.last_release_status === 'failed' ? 'danger' : node.last_release_status === 'ok' ? 'success' : 'warning'">
+          <span
+            class="badge"
+            :class="
+              node.last_release_status === 'failed'
+                ? 'danger'
+                : node.last_release_status === 'ok'
+                  ? 'success'
+                  : 'warning'
+            "
+          >
             {{ node.last_release_status }}
           </span>
         </td>
@@ -271,23 +273,23 @@ onMounted(loadData)
             style="margin-top: 6px; padding: 2px 10px; font-size: 12px"
             @click="toggleNodeLog(node.id)"
           >
-            {{ isNodeLogExpanded(node.id) ? '收起' : '展开' }}
+            {{ isNodeLogExpanded(node.id) ? 'Collapse' : 'Expand' }}
           </button>
         </td>
       </tr>
       <tr v-if="!loading && filteredNodes.length === 0">
-        <td colspan="7" class="muted">暂无已下发版本的节点</td>
+        <td colspan="7" class="muted">No nodes with release history</td>
       </tr>
     </tbody>
   </DataGrid>
 
-  <DataGrid title="最近10次操作">
+  <DataGrid title="Recent 10 Operations">
     <thead>
       <tr>
-        <th>时间</th>
-        <th>节点数</th>
-        <th>配置摘要</th>
-        <th>发布结果</th>
+        <th>Time</th>
+        <th>Nodes</th>
+        <th>Config Summary</th>
+        <th>Result</th>
       </tr>
     </thead>
     <tbody>
@@ -298,14 +300,14 @@ onMounted(loadData)
         <td>{{ operationResultSummary(operation) }}</td>
       </tr>
       <tr v-if="!loading && operations.length === 0">
-        <td colspan="4" class="muted">暂无操作记录</td>
+        <td colspan="4" class="muted">No operation history</td>
       </tr>
     </tbody>
   </DataGrid>
 
-  <DetailDrawer v-model="drawerOpen" title="新增节点应用">
+  <DetailDrawer v-model="drawerOpen" title="Create Release Apply">
     <article class="panel panel-pad" style="display: grid; gap: 10px">
-      <strong>1) 选择节点</strong>
+      <strong>1) Select Nodes</strong>
       <div style="max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px">
         <label v-for="node in nodes" :key="node.id" style="display: flex; gap: 8px; align-items: center; padding: 6px 0">
           <input type="checkbox" :checked="selectedNodes.has(node.id)" @change="toggleNode(node.id)" />
@@ -316,7 +318,7 @@ onMounted(loadData)
     </article>
 
     <article class="panel panel-pad" style="display: grid; gap: 10px">
-      <strong>2) 选择配置模板</strong>
+      <strong>2) Select Templates</strong>
       <div style="max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px">
         <label v-for="template in templatesWithStatus" :key="template.id" style="display: grid; gap: 4px; padding: 6px 0">
           <span style="display: flex; gap: 8px; align-items: center">
@@ -334,11 +336,11 @@ onMounted(loadData)
       </div>
     </article>
 
-    <ParamEditor v-model="paramsJson" label="3) 自定义参数" hint="JSON 对象，可选。" />
+    <ParamEditor v-model="paramsJson" label="3) Params" hint="Optional JSON object" />
 
     <div style="display: flex; justify-content: flex-end">
       <button class="btn btn-primary" :disabled="pending" @click="applyToNodes">
-        {{ pending ? '应用中...' : '立即应用' }}
+        {{ pending ? 'Applying...' : 'Apply Now' }}
       </button>
     </div>
   </DetailDrawer>

@@ -25,6 +25,11 @@ async function applyHeartbeat(node, report, kv) {
   const now = new Date().toISOString()
   node.last_seen_at = now
   node.updated_at = now
+  const desiredArtifact =
+    node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
+      ? node.desired_artifact
+      : null
+  const desiredVersion = desiredArtifact ? Number(desiredArtifact.rev || 0) : Number(node.desired_version || 0)
 
   if (report) {
     node.deploy_info = toText(report.deploy_info, 1024)
@@ -41,7 +46,7 @@ async function applyHeartbeat(node, report, kv) {
 
   return ok({
     node_id: node.id,
-    desired_version: Number(node.desired_version || 0),
+    desired_version: desiredVersion,
     applied_version: Number(node.applied_version || 0),
     last_seen_at: node.last_seen_at,
     heartbeat_reported_at: node.heartbeat_reported_at || null,

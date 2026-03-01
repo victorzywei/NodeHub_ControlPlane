@@ -1,4 +1,5 @@
 import { requireAdmin } from '../../_lib/auth.js'
+import { buildNodeArtifactBundle, summarizeConfig } from '../../_lib/artifact.js'
 import { BUILTIN_TEMPLATES } from '../../_lib/constants.js'
 import {
   KEY,
@@ -14,21 +15,6 @@ import { ok, fail } from '../../_lib/response.js'
 function toParams(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   return value
-}
-
-function summarizeParams(params) {
-  const entries = Object.entries(params)
-  if (entries.length === 0) return ''
-  return entries
-    .slice(0, 3)
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(', ')
-}
-
-function summarizeConfig(templateNames, params) {
-  const templateText = templateNames.length > 0 ? templateNames.join('、') : 'no-template'
-  const paramsText = summarizeParams(params)
-  return paramsText ? `${templateText} | ${paramsText}` : templateText
 }
 
 async function resolveTemplate(kv, id) {
@@ -54,6 +40,35 @@ function sortByCreatedDesc(rows) {
   return [...rows].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
 }
 
+function collectArtifactIdsFromOperation(operation) {
+  if (!operation || typeof operation !== 'object' || !Array.isArray(operation.results)) return []
+  const ids = []
+  for (const item of operation.results) {
+    const artifactId = String(item?.artifact_id || '').trim()
+    if (artifactId) ids.push(artifactId)
+  }
+  return ids
+}
+
+async function collectReferencedArtifactIds(kv) {
+  const rows = await readIndex(kv, KEY.idxNodes)
+  if (rows.length === 0) return new Set()
+
+  const nodes = await Promise.all(rows.map((row) => kvGetJson(kv, KEY.node(row.id), null)))
+  const ids = new Set()
+
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') continue
+
+    const desiredId = String(node.desired_artifact?.id || '').trim()
+    const appliedId = String(node.applied_artifact?.id || '').trim()
+    if (desiredId) ids.add(desiredId)
+    if (appliedId) ids.add(appliedId)
+  }
+
+  return ids
+}
+
 async function readRecentOperations(kv) {
   const indexRows = await readIndex(kv, KEY.idxReleases)
   const sortedRows = sortByCreatedDesc(indexRows)
@@ -62,9 +77,23 @@ async function readRecentOperations(kv) {
   if (recentRows.length !== indexRows.length || JSON.stringify(recentRows) !== JSON.stringify(indexRows)) {
     await writeIndex(kv, KEY.idxReleases, recentRows)
 
-    const keepSet = new Set(recentRows.map((item) => item.id))
     const oldRows = sortedRows.slice(10)
-    await Promise.all(oldRows.filter((item) => !keepSet.has(item.id)).map((item) => kvDelete(kv, KEY.release(item.id))))
+    if (oldRows.length > 0) {
+      const oldOperations = await Promise.all(oldRows.map((item) => kvGetJson(kv, KEY.release(item.id), null)))
+      const referencedArtifactIds = await collectReferencedArtifactIds(kv)
+      const staleArtifactIds = new Set()
+
+      for (const operation of oldOperations) {
+        for (const artifactId of collectArtifactIdsFromOperation(operation)) {
+          if (!referencedArtifactIds.has(artifactId)) staleArtifactIds.add(artifactId)
+        }
+      }
+
+      await Promise.all([
+        ...oldRows.map((item) => kvDelete(kv, KEY.release(item.id))),
+        ...[...staleArtifactIds].map((artifactId) => kvDelete(kv, KEY.artifact(artifactId))),
+      ])
+    }
   }
 
   const operations = await Promise.all(recentRows.map((row) => kvGetJson(kv, KEY.release(row.id), null)))
@@ -101,15 +130,6 @@ export async function onRequestPost({ request, env }) {
   const now = new Date().toISOString()
   const templateNames = templates.map((item) => item.name)
   const summary = summarizeConfig(templateNames, params)
-  const templateSnapshot = templates.map((item) => ({
-    id: item.id,
-    name: item.name,
-    protocol: item.protocol,
-    transport: item.transport,
-    tls_mode: item.tls_mode,
-    defaults: item.defaults || {},
-  }))
-
   const results = []
 
   for (const nodeId of nodeIds) {
@@ -121,28 +141,69 @@ export async function onRequestPost({ request, env }) {
 
     const nextVersion = Math.max(Number(node.desired_version || 0), Number(node.applied_version || 0)) + 1
 
-    node.desired_version = nextVersion
-    node.desired_config = {
-      rev: nextVersion,
-      template_ids: templateIds,
-      template_names: templateNames,
-      templates: templateSnapshot,
-      params,
-      operation_id: id,
-      created_at: now,
-    }
-    node.desired_config_summary = summary
-    node.last_release_status = 'pending'
-    node.last_release_message = `config queued r${nextVersion}`
-    node.updated_at = now
+    try {
+      const artifact = await buildNodeArtifactBundle({
+        node,
+        rev: nextVersion,
+        operationId: id,
+        templates,
+        params,
+        createdAt: now,
+      })
+      const artifactId = createId('artifact')
 
-    await kvPutJson(kv, KEY.node(node.id), node)
-    results.push({ node_id: node.id, node_name: node.name, status: 'queued', desired_version: nextVersion })
+      await kvPutJson(kv, KEY.artifact(artifactId), {
+        id: artifactId,
+        node_id: node.id,
+        rev: artifact.rev,
+        engine: artifact.engine,
+        reload_cmd: artifact.reload_cmd,
+        sha256: artifact.sha256,
+        bundle: artifact.bundle,
+        created_at: now,
+      })
+
+      node.desired_version = nextVersion
+      node.desired_artifact = {
+        id: artifactId,
+        rev: artifact.rev,
+        engine: artifact.engine,
+        reload_cmd: artifact.reload_cmd,
+        sha256: artifact.sha256,
+        summary: artifact.summary,
+        template_names: artifact.template_names,
+        params: artifact.params || {},
+        subscription_outbounds: artifact.subscription_outbounds || [],
+        created_at: now,
+      }
+      node.last_release_status = 'pending'
+      node.last_release_error_code = ''
+      node.last_release_message = `artifact queued r${nextVersion}`
+      node.updated_at = now
+
+      await kvPutJson(kv, KEY.node(node.id), node)
+      results.push({
+        node_id: node.id,
+        node_name: node.name,
+        status: 'queued',
+        desired_version: nextVersion,
+        artifact_id: artifactId,
+        artifact_sha256: artifact.sha256,
+        engine: artifact.engine,
+      })
+    } catch (error) {
+      results.push({
+        node_id: node.id,
+        node_name: node.name,
+        status: 'failed',
+        reason: error instanceof Error ? error.message : 'artifact generation failed',
+      })
+    }
   }
 
   const operation = {
     id,
-    mode: 'direct_apply',
+    mode: 'artifact_apply',
     node_ids: nodeIds,
     template_ids: templateIds,
     template_names: templateNames,

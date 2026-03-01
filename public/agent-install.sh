@@ -382,7 +382,7 @@ CONFIG_ROOT="$CONFIG_ROOT"
 EOF
 chmod 600 "$CONFIG_FILE" || true
 
-# Runner: minimal external deps (curl/awk/grep/sed)
+# Runner: control-plane artifact deployment (download + verify + atomic apply)
 cat > "$RUNNER_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -408,7 +408,6 @@ touch "$EVENTS_FILE" "$ERROR_FILE"
 trim_text() { printf '%s' "${1:-}" | tr '\r\n\t' '   '; }
 
 json_escape() {
-  # escape backslash + quote; normalize whitespace
   printf '%s' "${1:-}" | tr '\r\n\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
@@ -426,12 +425,12 @@ detect_protocol_app_version() {
   local cmd_timeout=""
   command -v timeout >/dev/null 2>&1 && cmd_timeout="timeout 5"
 
-  if command -v xray >/dev/null 2>&1; then
-    $cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\r\n' || true
-    return
-  fi
   if command -v sing-box >/dev/null 2>&1; then
     $cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\r\n' || true
+    return
+  fi
+  if command -v xray >/dev/null 2>&1; then
+    $cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\r\n' || true
     return
   fi
   echo ""
@@ -475,7 +474,7 @@ build_heartbeat_payload() {
   local current_version deploy_info protocol_version error_message cpu_usage
   local memory_used memory_total memory_usage
   current_version="$(read_current_version)"
-  deploy_info="applied_version=v${current_version}"
+  deploy_info="applied_rev=r${current_version}"
   protocol_version="$(detect_protocol_app_version)"
   error_message="$(read_last_error)"
   cpu_usage="$(cpu_usage_percent)"
@@ -512,6 +511,11 @@ json_bool_field() {
   echo "$payload" | tr -d '\r\n' | grep -q "\"$key\":true" && echo "true" || echo "false"
 }
 
+json_string_field() {
+  local key="${1}" payload="${2}"
+  echo "$payload" | tr -d '\r\n' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n1
+}
+
 generate_event_id() {
   if [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid; return; fi
   command -v uuidgen >/dev/null 2>&1 && uuidgen | tr 'A-Z' 'a-z' && return
@@ -519,14 +523,14 @@ generate_event_id() {
 }
 
 enqueue_apply_event() {
-  local status="$1" version="$2" message="$3"
-  local now event_id
+  local status="$1" version="$2" message="$3" error_code="${4:-}"
+  local now event_id msg code_json
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   event_id="$(generate_event_id)"
-  local msg
   msg="$(json_escape "$message")"
-  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"message":"%s","occurred_at":"%s"}\n' \
-    "$event_id" "$status" "$version" "$msg" "$now" >> "$EVENTS_FILE"
+  code_json="$(json_escape "$error_code")"
+  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"error_code":"%s","message":"%s","occurred_at":"%s"}\n' \
+    "$event_id" "$status" "$version" "$code_json" "$msg" "$now" >> "$EVENTS_FILE"
 }
 
 flush_pending_events() {
@@ -546,32 +550,47 @@ flush_pending_events() {
   return 1
 }
 
-apply_target_version() {
-  local target_version="$1"
-  if [[ -x "$APPLY_HOOK" ]]; then
-    if ! "$APPLY_HOOK" "$target_version"; then
-      set_last_error "release apply failed"
-      enqueue_apply_event "failed" "$target_version" "release apply failed"
-      return 1
-    fi
+apply_target_release() {
+  local target_version="$1" artifact_url="$2" artifact_sha256="$3" engine="$4" reload_cmd="$5"
+  [[ -n "$artifact_url" && -n "$artifact_sha256" ]] || {
+    set_last_error "reconcile payload missing artifact"
+    enqueue_apply_event "failed" "$target_version" "artifact metadata missing" "E_RECONCILE"
+    return 1
+  }
+
+  if [[ ! -x "$APPLY_HOOK" ]]; then
+    set_last_error "apply hook missing"
+    enqueue_apply_event "failed" "$target_version" "apply hook missing" "E_HOOK"
+    return 1
+  fi
+
+  local output="" err_code="" err_message=""
+  if ! output="$("$APPLY_HOOK" "$target_version" "$artifact_url" "$artifact_sha256" "$engine" "$reload_cmd" 2>&1)"; then
+    err_code="$(printf '%s\n' "$output" | awk -F= '/^ERROR_CODE=/{ print $2; exit }')"
+    err_message="$(printf '%s\n' "$output" | awk -F= '/^ERROR_MESSAGE=/{ print substr($0, index($0, "=") + 1); exit }')"
+    [[ -n "$err_code" ]] || err_code="E_APPLY"
+    [[ -n "$err_message" ]] || err_message="artifact apply failed"
+    set_last_error "$err_code: $err_message"
+    enqueue_apply_event "failed" "$target_version" "$err_message" "$err_code"
+    return 1
   fi
 
   if echo "$target_version" > "$VERSION_FILE"; then
-    enqueue_apply_event "ok" "$target_version" "release applied"
     clear_last_error
+    enqueue_apply_event "ok" "$target_version" "artifact applied" ""
     return 0
   fi
 
-  set_last_error "release apply failed"
-  enqueue_apply_event "failed" "$target_version" "release apply failed"
+  set_last_error "E_STATE: failed to persist version"
+  enqueue_apply_event "failed" "$target_version" "failed to persist version" "E_STATE"
   return 1
 }
 
 reconcile_once() {
-  local current_version response desired_version needs_update
+  local current_version response desired_version needs_update artifact_url artifact_sha256 engine reload_cmd
   current_version="$(read_current_version)"
 
-  response="$(curl -fsS --max-time 15 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
+  response="$(curl -fsS --max-time 20 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
     -H "X-Node-Token: $NODE_TOKEN")" || {
     set_last_error "reconcile request failed"
     return 1
@@ -579,19 +598,28 @@ reconcile_once() {
 
   desired_version="$(json_number_field "desired_version" "$response")"
   needs_update="$(json_bool_field "needs_update" "$response")"
+  artifact_url="$(json_string_field "artifact_url" "$response")"
+  artifact_sha256="$(json_string_field "sha256" "$response")"
+  engine="$(json_string_field "engine" "$response")"
+  reload_cmd="$(json_string_field "reload_cmd" "$response")"
 
   if [[ "$needs_update" != "true" ]]; then
     clear_last_error
     return 0
   fi
-  [[ -n "$desired_version" ]] || { set_last_error "invalid reconcile response"; return 1; }
+
+  [[ -n "$desired_version" ]] || {
+    set_last_error "invalid reconcile response"
+    enqueue_apply_event "failed" "$current_version" "invalid reconcile response" "E_RECONCILE"
+    return 1
+  }
 
   if [[ "$desired_version" -le "$current_version" ]]; then
     clear_last_error
     return 0
   fi
 
-  apply_target_version "$desired_version"
+  apply_target_release "$desired_version" "$artifact_url" "$artifact_sha256" "$engine" "$reload_cmd"
 }
 
 heartbeat_loop() {
@@ -645,10 +673,229 @@ case "$MODE" in
 esac
 EOF
 
+# Default apply hook: download -> verify -> stage -> validate -> atomic switch -> reload -> health -> rollback
+cat > "$APPLY_HOOK" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_REV="${1:-}"
+ARTIFACT_URL="${2:-}"
+EXPECTED_SHA256="${3:-}"
+ENGINE_HINT="${4:-}"
+RELOAD_CMD="${5:-}"
+
+CONFIG_FILE="__NODEHUB_CONFIG_FILE__"
+[[ -f "$CONFIG_FILE" ]] || { echo "ERROR_CODE=E_CONFIG"; echo "ERROR_MESSAGE=config file missing"; exit 1; }
+# shellcheck source=/dev/null
+source "$CONFIG_FILE"
+
+RELEASES_DIR="$STATE_DIR/releases"
+STAGING_ROOT="$STATE_DIR/staging"
+CURRENT_LINK="$STATE_DIR/current"
+LAST_GOOD_LINK="$STATE_DIR/last-known-good"
+PROTO_PIDFILE="$STATE_DIR/protocol.pid"
+PROTO_LOG="$STATE_DIR/protocol.log"
+CERT_CRT="${CONFIG_ROOT}/cert/server.crt"
+CERT_KEY="${CONFIG_ROOT}/cert/server.key"
+
+mkdir -p "$RELEASES_DIR" "$STAGING_ROOT"
+
+fail_with() {
+  local code="$1" msg="$2"
+  echo "ERROR_CODE=$code"
+  echo "ERROR_MESSAGE=$msg"
+  exit 1
+}
+
+calc_sha256_file() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$file" | awk '{print $2}'
+    return
+  fi
+  fail_with "E_HASH" "no sha256 tool available"
+}
+
+decode_base64_to_file() {
+  local data="$1" outfile="$2"
+  if command -v base64 >/dev/null 2>&1; then
+    if printf '%s' "$data" | base64 -d > "$outfile" 2>/dev/null; then return 0; fi
+    if printf '%s' "$data" | base64 --decode > "$outfile" 2>/dev/null; then return 0; fi
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    if printf '%s' "$data" | openssl base64 -d -A > "$outfile" 2>/dev/null; then return 0; fi
+  fi
+  return 1
+}
+
+replace_token_file() {
+  local token="$1" value="$2" file="$3" esc tmp
+  esc="$(printf '%s' "$value" | sed 's/[\/&]/\\&/g')"
+  tmp="${file}.tmp.$$"
+  sed "s/${token}/${esc}/g" "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+extract_bundle() {
+  local bundle_file="$1" out_dir="$2"
+  local header line entry path b64
+
+  header="$(head -n 1 "$bundle_file" | tr -d '\r')"
+  [[ "$header" == "NODEHUB-BUNDLE-V1" ]] || fail_with "E_PARSE" "invalid bundle header"
+
+  rm -rf "$out_dir"
+  mkdir -p "$out_dir"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" == file=* ]] || continue
+    entry="${line#file=}"
+    path="${entry%%|*}"
+    b64="${entry#*|}"
+    [[ -n "$path" && "$path" != "$entry" ]] || fail_with "E_PARSE" "invalid file entry"
+    [[ "$path" != /* && "$path" != *".."* ]] || fail_with "E_PARSE" "unsafe path in bundle"
+
+    mkdir -p "$(dirname "$out_dir/$path")"
+    decode_base64_to_file "$b64" "$out_dir/$path" || fail_with "E_PARSE" "failed to decode bundle file $path"
+  done < "$bundle_file"
+}
+
+stop_protocol() {
+  local pid=""
+  [[ -f "$PROTO_PIDFILE" ]] && pid="$(cat "$PROTO_PIDFILE" 2>/dev/null || true)" || true
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PROTO_PIDFILE"
+}
+
+start_protocol() {
+  local engine="$1" release_dir="$2" config_file=""
+  if [[ "$engine" == "sing-box" ]]; then
+    config_file="$release_dir/sing-box.json"
+    [[ -f "$config_file" ]] || return 11
+    command -v sing-box >/dev/null 2>&1 || return 12
+    nohup sing-box run -c "$config_file" > "$PROTO_LOG" 2>&1 &
+  elif [[ "$engine" == "xray" ]]; then
+    config_file="$release_dir/xray.json"
+    [[ -f "$config_file" ]] || return 13
+    command -v xray >/dev/null 2>&1 || return 14
+    nohup xray run -config "$config_file" > "$PROTO_LOG" 2>&1 &
+  else
+    return 15
+  fi
+
+  local pid="$!"
+  echo "$pid" > "$PROTO_PIDFILE"
+  sleep 1
+  kill -0 "$pid" 2>/dev/null || return 16
+  return 0
+}
+
+validate_release() {
+  local engine="$1" release_dir="$2"
+  if [[ "$engine" == "sing-box" ]]; then
+    [[ -f "$release_dir/sing-box.json" ]] || fail_with "E_VALIDATE" "sing-box.json missing"
+    replace_token_file "__NODEHUB_CERT_CRT__" "$CERT_CRT" "$release_dir/sing-box.json"
+    replace_token_file "__NODEHUB_CERT_KEY__" "$CERT_KEY" "$release_dir/sing-box.json"
+    command -v sing-box >/dev/null 2>&1 || fail_with "E_VALIDATE" "sing-box binary missing"
+    sing-box check -c "$release_dir/sing-box.json" >/dev/null 2>&1 || fail_with "E_VALIDATE" "sing-box config check failed"
+    return 0
+  fi
+
+  if [[ "$engine" == "xray" ]]; then
+    [[ -f "$release_dir/xray.json" ]] || fail_with "E_VALIDATE" "xray.json missing"
+    replace_token_file "__NODEHUB_CERT_CRT__" "$CERT_CRT" "$release_dir/xray.json"
+    replace_token_file "__NODEHUB_CERT_KEY__" "$CERT_KEY" "$release_dir/xray.json"
+    command -v xray >/dev/null 2>&1 || fail_with "E_VALIDATE" "xray binary missing"
+    xray run -test -config "$release_dir/xray.json" >/dev/null 2>&1 || fail_with "E_VALIDATE" "xray config check failed"
+    return 0
+  fi
+
+  fail_with "E_VALIDATE" "unsupported engine: $engine"
+}
+
+read_engine_from_manifest_env() {
+  local release_dir="$1" mf
+  mf="$release_dir/manifest.env"
+  [[ -f "$mf" ]] || return 0
+  awk -F= '$1=="ENGINE"{ print $2; exit }' "$mf"
+}
+
+apply_release() {
+  local rev="$1" artifact_url="$2" expected_sha="$3" engine_hint="$4" reload_cmd="$5"
+  local tmp_dir bundle_file actual_sha release_dir stage_dir old_release old_engine new_engine
+  tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t nodehub-apply)"
+  bundle_file="$tmp_dir/bundle.txt"
+  stage_dir="$STAGING_ROOT/r${rev}"
+  release_dir="$RELEASES_DIR/r${rev}"
+  old_release="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
+
+  curl -fsS --max-time 60 "$artifact_url" -H "X-Node-Token: $NODE_TOKEN" -o "$bundle_file" || fail_with "E_DOWNLOAD" "artifact download failed"
+  actual_sha="$(calc_sha256_file "$bundle_file")"
+  [[ -n "$actual_sha" && "$actual_sha" == "$expected_sha" ]] || fail_with "E_HASH" "artifact sha256 mismatch"
+
+  extract_bundle "$bundle_file" "$stage_dir"
+  new_engine="$(read_engine_from_manifest_env "$stage_dir")"
+  [[ -n "$new_engine" ]] || new_engine="$engine_hint"
+  [[ -n "$new_engine" ]] || fail_with "E_PARSE" "engine missing in bundle"
+
+  validate_release "$new_engine" "$stage_dir"
+
+  rm -rf "$release_dir"
+  mv "$stage_dir" "$release_dir"
+  ln -sfn "$release_dir" "$CURRENT_LINK"
+
+  if [[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]]; then
+    sh -lc "$reload_cmd" >/dev/null 2>&1 || {
+      if [[ -n "$old_release" && -d "$old_release" ]]; then ln -sfn "$old_release" "$CURRENT_LINK"; fi
+      fail_with "E_RELOAD" "custom reload command failed"
+    }
+  else
+    stop_protocol
+    if ! start_protocol "$new_engine" "$release_dir"; then
+      if [[ -n "$old_release" && -d "$old_release" ]]; then
+        ln -sfn "$old_release" "$CURRENT_LINK"
+        old_engine="$(read_engine_from_manifest_env "$old_release")"
+        if [[ -n "$old_engine" ]]; then
+          stop_protocol || true
+          start_protocol "$old_engine" "$old_release" || true
+        fi
+      fi
+      fail_with "E_HEALTH" "failed to start new protocol process"
+    fi
+  fi
+
+  ln -sfn "$release_dir" "$LAST_GOOD_LINK"
+  rm -rf "$tmp_dir"
+}
+
+[[ -n "$TARGET_REV" && -n "$ARTIFACT_URL" && -n "$EXPECTED_SHA256" ]] || fail_with "E_ARGS" "missing apply arguments"
+apply_release "$TARGET_REV" "$ARTIFACT_URL" "$EXPECTED_SHA256" "$ENGINE_HINT" "$RELOAD_CMD"
+echo "ERROR_CODE="
+echo "ERROR_MESSAGE="
+exit 0
+EOF
+
 # Replace placeholder config path
 CONFIG_FILE_ESCAPED="$(printf '%s' "$CONFIG_FILE" | sed 's/[\/&]/\\&/g')"
 sedi "s/__NODEHUB_CONFIG_FILE__/${CONFIG_FILE_ESCAPED}/g" "$RUNNER_SCRIPT"
+sedi "s/__NODEHUB_CONFIG_FILE__/${CONFIG_FILE_ESCAPED}/g" "$APPLY_HOOK"
 chmod 700 "$RUNNER_SCRIPT" || true
+chmod 700 "$APPLY_HOOK" || true
 
 # ---------- systemd service files ----------
 if [[ "$INSTALL_MODE" == "user" ]]; then

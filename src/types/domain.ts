@@ -1,20 +1,11 @@
 export type NodeKind = 'vps' | 'edge'
 
-export interface NodeDesiredConfig {
-  rev: number
-  template_ids: string[]
-  template_names: string[]
-  templates: Array<{
-    id: string
-    name: string
-    protocol: string
-    transport: string
-    tls_mode: string
-    defaults: Record<string, unknown>
-  }>
-  params: Record<string, unknown>
-  operation_id: string
-  created_at: string
+export interface ArtifactSubscriptionOutbound {
+  protocol: string
+  transport: string
+  tls_mode: string
+  port: number
+  settings: Record<string, unknown>
 }
 
 export interface NodeRecord {
@@ -41,10 +32,28 @@ export interface NodeRecord {
   memory_total_mb: number | null
   memory_usage_percent: number | null
   heartbeat_reported_at: string | null
-  desired_config: NodeDesiredConfig | null
-  desired_config_summary: string
-  applied_config_summary: string
+  desired_artifact: {
+    id: string
+    rev: number
+    engine: string
+    reload_cmd: string
+    sha256: string
+    summary: string
+    template_names: string[]
+    params: Record<string, unknown>
+    subscription_outbounds: ArtifactSubscriptionOutbound[]
+    created_at: string
+  } | null
+  applied_artifact: {
+    id: string
+    rev: number
+    engine: string
+    sha256: string
+    summary: string
+    applied_at: string
+  } | null
   last_release_status: 'idle' | 'pending' | 'ok' | 'failed'
+  last_release_error_code: string
   last_release_message: string
   created_at: string
   updated_at: string
@@ -76,7 +85,7 @@ export interface SubscriptionRecord {
 
 export interface ReleaseRecord {
   id: string
-  mode: 'direct_apply'
+  mode: 'direct_apply' | 'artifact_apply'
   node_ids: string[]
   template_ids: string[]
   template_names: string[]
@@ -87,6 +96,9 @@ export interface ReleaseRecord {
     node_name?: string
     status: 'queued' | 'failed'
     desired_version?: number
+    artifact_id?: string
+    artifact_sha256?: string
+    engine?: string
     reason?: string
   }>
   created_at: string

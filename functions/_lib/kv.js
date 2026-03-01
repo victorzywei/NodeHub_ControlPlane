@@ -8,6 +8,7 @@
   templateOverride: (id) => `template_override:${id}`,
   subscription: (token) => `subscription:${token}`,
   release: (id) => `release:${id}`,
+  artifact: (id) => `artifact:${id}`,
 }
 
 export { KEY }

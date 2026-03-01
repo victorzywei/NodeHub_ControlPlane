@@ -1,10 +1,9 @@
-import { KEY, kvGetJson, kvPutJson } from '../_lib/kv.js'
+import { KEY, kvGetJson } from '../_lib/kv.js'
 import { ok, fail } from '../_lib/response.js'
 
 export async function onRequestGet({ request, env }) {
   const url = new URL(request.url)
   const nodeId = String(url.searchParams.get('node_id') || '')
-  const currentVersion = Number(url.searchParams.get('current_version') || 0)
   const token = request.headers.get('X-Node-Token') || ''
 
   if (!nodeId) return fail('VALIDATION', 'node_id is required', 400)
@@ -15,22 +14,27 @@ export async function onRequestGet({ request, env }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.token !== token) return fail('UNAUTHORIZED', 'Invalid node token', 401)
 
-  const nextAppliedVersion = Number.isFinite(currentVersion) ? Math.max(0, Math.floor(currentVersion)) : 0
-  if (nextAppliedVersion !== Number(node.applied_version || 0)) {
-    node.applied_version = nextAppliedVersion
-    if (nextAppliedVersion >= Number(node.desired_version || 0) && node.desired_config_summary) {
-      node.applied_config_summary = String(node.desired_config_summary || '')
-    }
-    node.updated_at = new Date().toISOString()
-    await kvPutJson(kv, KEY.node(node.id), node)
-  }
+  const desiredArtifact =
+    node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
+      ? node.desired_artifact
+      : null
+  const desiredVersion = desiredArtifact ? Number(desiredArtifact.rev || 0) : Number(node.desired_version || 0)
+
+  const origin = new URL(request.url).origin
+  const artifactUrl =
+    desiredArtifact && desiredVersion > 0
+      ? `${origin}/agent/artifact?node_id=${encodeURIComponent(node.id)}&rev=${encodeURIComponent(desiredVersion)}`
+      : ''
 
   return ok({
     node_id: node.id,
     current_version: Number(node.applied_version || 0),
-    desired_version: Number(node.desired_version || 0),
-    desired_config: node.desired_config && typeof node.desired_config === 'object' ? node.desired_config : null,
-    desired_config_summary: String(node.desired_config_summary || ''),
-    needs_update: Number(node.desired_version || 0) > Number(node.applied_version || 0),
+    desired_version: desiredVersion,
+    rev: desiredVersion,
+    artifact_url: artifactUrl,
+    sha256: desiredArtifact ? String(desiredArtifact.sha256 || '') : '',
+    engine: desiredArtifact ? String(desiredArtifact.engine || '') : '',
+    reload_cmd: desiredArtifact ? String(desiredArtifact.reload_cmd || '') : '',
+    needs_update: desiredVersion > Number(node.applied_version || 0),
   })
 }
