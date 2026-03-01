@@ -176,6 +176,11 @@ require_or_install curl curl ca-certificates || die "curl is required (install i
 require_or_install tar tar || warn "tar not found; sing-box extraction may fail unless already installed."
 require_or_install unzip unzip || warn "unzip not found; xray extraction may fail unless already installed."
 
+# openssl is needed for SSL certificate operations
+if ! need_cmd openssl; then
+  warn "openssl not found; will attempt to install if needed for SSL certificates."
+fi
+
 # ---------- Install mode / directories ----------
 INSTALL_MODE="system"
 if mkdir -p "$STATE_DIR" "$AGENT_ROOT" "$CONFIG_ROOT" >/dev/null 2>&1; then
@@ -757,20 +762,30 @@ EOF
   log "  $STATE_DIR/reconcile.log"
 fi
 
-# ---------- SSL via acme.sh (optional) ----------
+# ---------- SSL certificate issuance (optional) ----------
+# Try acme.sh first (if openssl available), fallback to lego
 issue_certs() {
   [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]] || return 0
 
-  log "Applying for SSL certificates (acme.sh)..."
+  log "Applying for SSL certificates..."
 
-  # best-effort install socat if using standalone
-  if [[ -z "$CF_API_TOKEN" ]]; then
-    if ! need_cmd socat; then
-      if is_root; then
-        install_pkgs socat >/dev/null 2>&1 || true
-      fi
+  # Try acme.sh first if openssl is available
+  if need_cmd openssl; then
+    if issue_certs_acme; then
+      return 0
     fi
+    warn "acme.sh failed, trying lego as fallback..."
+  else
+    log "openssl not found, using lego (no openssl dependency)..."
   fi
+
+  # Fallback to lego
+  issue_certs_lego
+}
+
+# Method 1: acme.sh (requires openssl)
+issue_certs_acme() {
+  log "Using acme.sh for certificate issuance..."
 
   local ACME_SH_DIR
   if [[ "$INSTALL_MODE" == "user" ]]; then
@@ -783,7 +798,7 @@ issue_certs() {
   local MAIN_DOMAIN="$TLS_DOMAIN"
   [[ -z "$MAIN_DOMAIN" ]] && MAIN_DOMAIN="$TLS_DOMAIN_ALT"
 
-  # install acme.sh
+  # Install acme.sh if not present
   if [[ ! -x "$ACME_SH_EXEC" ]]; then
     log "Installing acme.sh..."
     
@@ -793,26 +808,41 @@ issue_certs() {
     local repo_url
     repo_url="$(wrap_url "$acme_repo_url")"
     
-    # Download and extract
-    curl -fsSL "$repo_url" -o "$acme_tarball" || die "Failed to download acme.sh"
-    tar -xzf "$acme_tarball" -C "$cleanup_dir" || die "Failed to extract acme.sh"
+    if ! curl -fsSL "$repo_url" -o "$acme_tarball" 2>/dev/null; then
+      warn "Failed to download acme.sh"
+      return 1
+    fi
     
-    # Find extracted directory
+    if ! tar -xzf "$acme_tarball" -C "$cleanup_dir" 2>/dev/null; then
+      warn "Failed to extract acme.sh"
+      return 1
+    fi
+    
     local acme_src
     acme_src="$(find "$cleanup_dir" -maxdepth 1 -type d -name 'acme.sh-*' | head -n 1)"
-    [[ -d "$acme_src" ]] || die "acme.sh source directory not found"
+    if [[ ! -d "$acme_src" ]]; then
+      warn "acme.sh source directory not found"
+      return 1
+    fi
     
-    # Run installer from source directory
-    cd "$acme_src" || die "Failed to enter acme.sh directory"
-    ./acme.sh --install \
+    cd "$acme_src" || return 1
+    if ! ./acme.sh --install \
       --home "$ACME_SH_DIR" \
       --config-home "${ACME_SH_DIR}/data" \
       --cert-home "${ACME_SH_DIR}/certs" \
       --accountemail "admin@${MAIN_DOMAIN}" \
-      --nocron || die "acme.sh install failed"
+      --nocron 2>/dev/null; then
+      cd - >/dev/null || true
+      warn "acme.sh installation failed"
+      return 1
+    fi
     cd - >/dev/null || true
   fi
-  [[ -x "$ACME_SH_EXEC" ]] || die "acme.sh not found after installation"
+
+  [[ -x "$ACME_SH_EXEC" ]] || {
+    warn "acme.sh not found after installation"
+    return 1
+  }
 
   "$ACME_SH_EXEC" --upgrade --auto-upgrade >/dev/null 2>&1 || true
   "$ACME_SH_EXEC" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
@@ -824,26 +854,163 @@ issue_certs() {
   mkdir -p "${CONFIG_ROOT}/cert"
   local CERT_DIR="${CONFIG_ROOT}/cert"
 
+  # Issue certificate
   if [[ -n "$CF_API_TOKEN" ]]; then
-    log "Using Cloudflare DNS API validation..."
-    CF_Token="$CF_API_TOKEN" "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256 || die "acme.sh DNS issue failed"
-  else
-    # standalone needs port 80 (root)
-    if ! is_root; then
-      warn "Standalone mode requires root (bind :80). Skipping cert issuance. Use --cf-api-token for DNS validation."
-      return 0
+    log "Using Cloudflare DNS validation..."
+    if ! CF_Token="$CF_API_TOKEN" "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256 2>/dev/null; then
+      warn "acme.sh certificate issuance failed"
+      return 1
     fi
-    need_cmd socat || warn "socat missing; standalone issuance may fail. Install socat and retry if needed."
+  else
+    if ! is_root; then
+      warn "Standalone mode requires root (bind :80)"
+      return 1
+    fi
+    
+    # Try to install socat for standalone mode
+    if ! need_cmd socat && is_root; then
+      install_pkgs socat >/dev/null 2>&1 || true
+    fi
+    
     log "Using standalone validation (port 80)..."
-    "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --standalone --keylength ec-256 || die "acme.sh standalone issue failed"
+    if ! "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --standalone --keylength ec-256 2>/dev/null; then
+      warn "acme.sh standalone issuance failed"
+      return 1
+    fi
   fi
 
-  # install cert (ECC)
-  "$ACME_SH_EXEC" --install-cert -d "$MAIN_DOMAIN" --ecc \
+  # Install certificate
+  if ! "$ACME_SH_EXEC" --install-cert -d "$MAIN_DOMAIN" --ecc \
     --key-file "$CERT_DIR/server.key" \
-    --fullchain-file "$CERT_DIR/server.crt" || die "acme.sh install-cert failed"
+    --fullchain-file "$CERT_DIR/server.crt" 2>/dev/null; then
+    warn "acme.sh certificate installation failed"
+    return 1
+  fi
 
-  log "SSL certificate installed to: $CERT_DIR"
+  log "SSL certificate installed via acme.sh to: $CERT_DIR"
+  return 0
+}
+
+# Method 2: lego (standalone binary, no dependencies)
+issue_certs_lego() {
+  log "Using lego for certificate issuance..."
+
+  local LEGO_BIN
+  if [[ "$INSTALL_MODE" == "user" ]]; then
+    LEGO_BIN="${HOME}/.local/bin/lego"
+  else
+    LEGO_BIN="/usr/local/bin/lego"
+  fi
+
+  # Install lego if not present
+  if [[ ! -x "$LEGO_BIN" ]]; then
+    log "Installing lego ACME client..."
+    
+    local LEGO_ARCH=""
+    case "$ARCH" in
+      x86_64|amd64) LEGO_ARCH="amd64" ;;
+      aarch64|arm64) LEGO_ARCH="arm64" ;;
+      armv7l|armv7) LEGO_ARCH="armv7" ;;
+      i386|i686) LEGO_ARCH="386" ;;
+      *)
+        warn "Unsupported architecture for lego: $ARCH"
+        return 1
+        ;;
+    esac
+    
+    # Get latest lego version
+    local lego_version
+    lego_version="$(curl -fsSL "$(wrap_url "https://api.github.com/repos/go-acme/lego/releases/latest")" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "v4.20.4")"
+    [[ -z "$lego_version" || "$lego_version" == *"{"* ]] && lego_version="v4.20.4"
+    
+    local lego_tarball="lego_${lego_version}_linux_${LEGO_ARCH}.tar.gz"
+    local lego_url
+    lego_url="$(wrap_url "https://github.com/go-acme/lego/releases/download/${lego_version}/${lego_tarball}")"
+    
+    cleanup_dir="$(mktempdir)"
+    local lego_tar="${cleanup_dir}/lego.tar.gz"
+    
+    log "Downloading lego: $lego_url"
+    if ! curl -fsSL "$lego_url" -o "$lego_tar" 2>/dev/null; then
+      warn "Failed to download lego"
+      return 1
+    fi
+    
+    if ! tar -xzf "$lego_tar" -C "$cleanup_dir" 2>/dev/null; then
+      warn "Failed to extract lego"
+      return 1
+    fi
+    
+    if [[ ! -f "${cleanup_dir}/lego" ]]; then
+      warn "lego binary not found after extraction"
+      return 1
+    fi
+    
+    mkdir -p "$(dirname "$LEGO_BIN")" || true
+    mv "${cleanup_dir}/lego" "$LEGO_BIN"
+    chmod 755 "$LEGO_BIN"
+    
+    log "lego installed to: $LEGO_BIN"
+  fi
+
+  # Prepare certificate directory
+  mkdir -p "${CONFIG_ROOT}/cert"
+  local CERT_DIR="${CONFIG_ROOT}/cert"
+  local LEGO_DATA_DIR="${CONFIG_ROOT}/.lego"
+  
+  # Build domain arguments
+  local MAIN_DOMAIN="$TLS_DOMAIN"
+  [[ -z "$MAIN_DOMAIN" ]] && MAIN_DOMAIN="$TLS_DOMAIN_ALT"
+  
+  local DOMAIN_ARGS=()
+  [[ -n "$TLS_DOMAIN" ]] && DOMAIN_ARGS+=(--domains "$TLS_DOMAIN")
+  [[ -n "$TLS_DOMAIN_ALT" ]] && DOMAIN_ARGS+=(--domains "$TLS_DOMAIN_ALT")
+  
+  # Issue certificate
+  if [[ -n "$CF_API_TOKEN" ]]; then
+    log "Using Cloudflare DNS validation..."
+    export CF_DNS_API_TOKEN="$CF_API_TOKEN"
+    
+    if ! "$LEGO_BIN" --path "$LEGO_DATA_DIR" \
+        --email "admin@${MAIN_DOMAIN}" \
+        --dns cloudflare \
+        --key-type ec256 \
+        "${DOMAIN_ARGS[@]}" \
+        run 2>/dev/null; then
+      warn "lego certificate issuance failed"
+      return 1
+    fi
+  else
+    if ! is_root; then
+      warn "Standalone mode requires root (bind :80)"
+      return 1
+    fi
+    
+    log "Using standalone validation (port 80)..."
+    if ! "$LEGO_BIN" --path "$LEGO_DATA_DIR" \
+        --email "admin@${MAIN_DOMAIN}" \
+        --http \
+        --key-type ec256 \
+        "${DOMAIN_ARGS[@]}" \
+        run 2>/dev/null; then
+      warn "lego standalone issuance failed"
+      return 1
+    fi
+  fi
+  
+  # Copy certificates to target directory
+  local LEGO_CERT_DIR="${LEGO_DATA_DIR}/certificates"
+  if [[ -f "${LEGO_CERT_DIR}/${MAIN_DOMAIN}.crt" && -f "${LEGO_CERT_DIR}/${MAIN_DOMAIN}.key" ]]; then
+    cp "${LEGO_CERT_DIR}/${MAIN_DOMAIN}.crt" "${CERT_DIR}/server.crt"
+    cp "${LEGO_CERT_DIR}/${MAIN_DOMAIN}.key" "${CERT_DIR}/server.key"
+    chmod 600 "${CERT_DIR}/server.key"
+    chmod 644 "${CERT_DIR}/server.crt"
+    log "SSL certificate installed via lego to: $CERT_DIR"
+    return 0
+  else
+    warn "Certificate files not found after lego issuance"
+    return 1
+  fi
 }
 
 issue_certs || true
