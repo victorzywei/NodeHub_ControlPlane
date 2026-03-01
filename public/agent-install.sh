@@ -879,8 +879,8 @@ issue_certs_acme() {
   # Issue certificate
   if [[ -n "$CF_API_TOKEN" ]]; then
     log "Using Cloudflare DNS validation..."
-    if ! CF_Token="$CF_API_TOKEN" "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256 2>/dev/null; then
-      warn "acme.sh certificate issuance failed"
+    if ! CF_Token="$CF_API_TOKEN" "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --dns dns_cf --keylength ec-256; then
+      warn "acme.sh certificate issuance failed (check Cloudflare API token permissions)"
       return 1
     fi
   else
@@ -895,7 +895,7 @@ issue_certs_acme() {
     fi
     
     log "Using standalone validation (port 80)..."
-    if ! "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --standalone --keylength ec-256 2>/dev/null; then
+    if ! "$ACME_SH_EXEC" --issue "${DOMAINS_ARGS[@]}" --standalone --keylength ec-256; then
       warn "acme.sh standalone issuance failed"
       return 1
     fi
@@ -904,7 +904,7 @@ issue_certs_acme() {
   # Install certificate
   if ! "$ACME_SH_EXEC" --install-cert -d "$MAIN_DOMAIN" --ecc \
     --key-file "$CERT_DIR/server.key" \
-    --fullchain-file "$CERT_DIR/server.crt" 2>/dev/null; then
+    --fullchain-file "$CERT_DIR/server.crt"; then
     warn "acme.sh certificate installation failed"
     return 1
   fi
@@ -999,8 +999,8 @@ issue_certs_lego() {
         --dns cloudflare \
         --key-type ec256 \
         "${DOMAIN_ARGS[@]}" \
-        run 2>/dev/null; then
-      warn "lego certificate issuance failed"
+        run; then
+      warn "lego certificate issuance failed (check Cloudflare API token permissions)"
       return 1
     fi
   else
@@ -1015,7 +1015,7 @@ issue_certs_lego() {
         --http \
         --key-type ec256 \
         "${DOMAIN_ARGS[@]}" \
-        run 2>/dev/null; then
+        run; then
       warn "lego standalone issuance failed"
       return 1
     fi
