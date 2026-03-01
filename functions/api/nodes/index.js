@@ -11,17 +11,32 @@ function normalizeNode(node) {
   const memoryUsed = Number(node.memory_used_mb)
   const memoryTotal = Number(node.memory_total_mb)
   const memoryUsage = Number(node.memory_usage_percent)
-  const desiredArtifact =
-    node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
-      ? node.desired_artifact
+  const targetArtifact =
+    node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
+      ? node.target_artifact
       : null
-  const appliedArtifact =
-    node.applied_artifact && typeof node.applied_artifact === 'object' && !Array.isArray(node.applied_artifact)
-      ? node.applied_artifact
+  const currentArtifact =
+    node.current_artifact && typeof node.current_artifact === 'object' && !Array.isArray(node.current_artifact)
+      ? node.current_artifact
       : null
+  const targetVersion = Number(node.target_version || 0) || 0
+  const currentVersion = Number(node.current_version || 0) || 0
 
   return {
-    ...node,
+    id: String(node.id || ''),
+    name: String(node.name || ''),
+    node_type: String(node.node_type || ''),
+    region: String(node.region || ''),
+    tags: Array.isArray(node.tags) ? node.tags.map((item) => String(item)) : [],
+    entry_cdn: String(node.entry_cdn || ''),
+    entry_direct: String(node.entry_direct || ''),
+    entry_ip: String(node.entry_ip || ''),
+    github_mirror: String(node.github_mirror || ''),
+    cf_api_token: String(node.cf_api_token || ''),
+    token: String(node.token || ''),
+    created_at: String(node.created_at || ''),
+    updated_at: String(node.updated_at || ''),
+    last_seen_at: node.last_seen_at ? String(node.last_seen_at) : null,
     deploy_info: String(node.deploy_info || ''),
     protocol_app_version: String(node.protocol_app_version || ''),
     last_heartbeat_error: String(node.last_heartbeat_error || ''),
@@ -30,11 +45,13 @@ function normalizeNode(node) {
     memory_total_mb: Number.isFinite(memoryTotal) ? memoryTotal : null,
     memory_usage_percent: Number.isFinite(memoryUsage) ? memoryUsage : null,
     heartbeat_reported_at: node.heartbeat_reported_at ? String(node.heartbeat_reported_at) : null,
-    desired_artifact: desiredArtifact,
-    applied_artifact: appliedArtifact,
+    target_version: targetVersion,
+    current_version: currentVersion,
+    target_artifact: targetArtifact,
+    current_artifact: currentArtifact,
     last_release_error_code: String(node.last_release_error_code || ''),
-    github_mirror: String(node.github_mirror || ''),
-    cf_api_token: String(node.cf_api_token || ''),
+    last_release_status: String(node.last_release_status || 'idle'),
+    last_release_message: String(node.last_release_message || ''),
     online,
   }
 }
@@ -81,8 +98,8 @@ export async function onRequestPost({ request, env }) {
     github_mirror: String(body.github_mirror || ''),
     cf_api_token: String(body.cf_api_token || ''),
     token: createToken(),
-    desired_version: 0,
-    applied_version: 0,
+    target_version: 0,
+    current_version: 0,
     last_seen_at: null,
     deploy_info: '',
     protocol_app_version: '',
@@ -92,8 +109,8 @@ export async function onRequestPost({ request, env }) {
     memory_total_mb: null,
     memory_usage_percent: null,
     heartbeat_reported_at: null,
-    desired_artifact: null,
-    applied_artifact: null,
+    target_artifact: null,
+    current_artifact: null,
     last_release_status: 'idle',
     last_release_error_code: '',
     last_release_message: '',

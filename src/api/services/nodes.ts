@@ -1,5 +1,5 @@
 ﻿import { request } from '@/api/request'
-import type { NodeRecord } from '@/types/domain'
+import type { NodeConfigDetail, NodeRecord } from '@/types/domain'
 
 export function listNodes(): Promise<NodeRecord[]> {
   return request('/api/nodes')
@@ -23,4 +23,8 @@ export function deleteNode(id: string): Promise<{ deleted: string }> {
 
 export function nodeInstallCommand(id: string): Promise<{ command: string }> {
   return request(`/api/nodes/${id}/install`)
+}
+
+export function getNodeConfig(id: string): Promise<NodeConfigDetail> {
+  return request(`/api/nodes/${id}/config`)
 }

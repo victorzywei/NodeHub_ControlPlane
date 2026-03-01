@@ -84,7 +84,7 @@ onMounted(load)
               {{ node.online ? '在线' : '离线' }}
             </span>
           </td>
-          <td>v{{ node.desired_version }}</td>
+          <td>v{{ node.target_version }}</td>
           <td>{{ formatDateTime(node.last_seen_at) }}</td>
         </tr>
         <tr v-if="!loading && nodes.length === 0">

@@ -49,8 +49,8 @@ export async function onRequestGet({ request, env, params }) {
   const outbounds = []
   for (const node of filtered) {
     const artifact =
-      node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
-        ? node.desired_artifact
+      node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
+        ? node.target_artifact
         : null
     if (!artifact || !Array.isArray(artifact.subscription_outbounds)) continue
 

@@ -4,10 +4,10 @@ import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ParamEditor from '@/components/ui/ParamEditor.vue'
-import { listNodes } from '@/api/services/nodes'
+import { getNodeConfig, listNodes } from '@/api/services/nodes'
 import { listTemplates } from '@/api/services/templates'
 import { createRelease, listReleases } from '@/api/services/releases'
-import type { NodeRecord, ReleaseRecord, TemplateRecord } from '@/types/domain'
+import type { NodeArtifactConfigView, NodeConfigDetail, NodeRecord, ReleaseRecord, TemplateRecord } from '@/types/domain'
 import { formatDateTime, formatRelative, parseJsonObject } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
@@ -17,6 +17,10 @@ const loading = ref(false)
 const pending = ref(false)
 const drawerOpen = ref(false)
 const expandedLogNodeIds = ref<Set<string>>(new Set())
+const configDrawerOpen = ref(false)
+const configLoading = ref(false)
+const configNodeName = ref('')
+const configDetail = ref<NodeConfigDetail | null>(null)
 
 const nodes = ref<NodeRecord[]>([])
 const templates = ref<TemplateRecord[]>([])
@@ -29,7 +33,7 @@ const paramsJson = ref('{}')
 const LOG_PREVIEW_LIMIT = 48
 
 function hasReleaseVersion(node: NodeRecord): boolean {
-  return Number(node.desired_version || 0) > 0 || Number(node.applied_version || 0) > 0
+  return Number(node.target_version || 0) > 0 || Number(node.current_version || 0) > 0
 }
 
 function summarizeParams(params: Record<string, unknown>): string {
@@ -51,14 +55,14 @@ function configSummary(templateNames: string[], params: Record<string, unknown>,
 }
 
 function nodeConfigSummary(node: NodeRecord): string {
-  const desired = node.desired_artifact
-  const applied = node.applied_artifact
-  const templateNames = Array.isArray(desired?.template_names) ? desired.template_names : []
+  const target = node.target_artifact
+  const current = node.current_artifact
+  const templateNames = Array.isArray(target?.template_names) ? target.template_names : []
   const params =
-    desired?.params && typeof desired.params === 'object' && !Array.isArray(desired.params)
-      ? desired.params
+    target?.params && typeof target.params === 'object' && !Array.isArray(target.params)
+      ? target.params
       : {}
-  return configSummary(templateNames, params, String(desired?.summary || applied?.summary || ''))
+  return configSummary(templateNames, params, String(target?.summary || current?.summary || ''))
 }
 
 function nodeLogSummary(node: NodeRecord): string {
@@ -102,6 +106,17 @@ function operationResultSummary(operation: ReleaseRecord): string {
   const success = operation.results.filter((item) => item.status === 'queued').length
   const failed = operation.results.filter((item) => item.status === 'failed').length
   return `success ${success} / failed ${failed}`
+}
+
+function configUpdatedAt(view: NodeArtifactConfigView | null): string {
+  if (!view?.created_at) return '-'
+  return formatDateTime(view.created_at)
+}
+
+function copyText(text: string, label: string): void {
+  if (!text) return
+  window.navigator.clipboard.writeText(text)
+  toastStore.push(`${label} copied`, 'success')
 }
 
 const releaseNodes = computed(() => nodes.value.filter(hasReleaseVersion))
@@ -217,6 +232,21 @@ async function applyToNodes(): Promise<void> {
   }
 }
 
+async function openNodeConfig(node: NodeRecord): Promise<void> {
+  configDrawerOpen.value = true
+  configLoading.value = true
+  configNodeName.value = node.name
+  configDetail.value = null
+
+  try {
+    configDetail.value = await getNodeConfig(node.id)
+  } catch {
+    toastStore.push('Failed to load node config', 'danger')
+  } finally {
+    configLoading.value = false
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -241,12 +271,23 @@ onMounted(loadData)
     <tbody>
       <tr v-for="node in filteredNodes" :key="node.id">
         <td>
-          <div style="font-weight: 700">{{ node.name }}</div>
+          <button
+            type="button"
+            style="font-weight: 700; background: transparent; border: 0; padding: 0; color: inherit; cursor: pointer; text-align: left"
+            @click="openNodeConfig(node)"
+          >
+            {{ node.name }}
+          </button>
           <div class="muted" style="font-size: 12px">{{ node.id }}</div>
         </td>
         <td>{{ node.node_type }}</td>
-        <td>r{{ node.applied_version }} -> r{{ node.desired_version }}</td>
-        <td>{{ nodeConfigSummary(node) }}</td>
+        <td>r{{ node.current_version }} -> r{{ node.target_version }}</td>
+        <td>
+          <div>{{ nodeConfigSummary(node) }}</div>
+          <button class="btn btn-secondary" style="margin-top: 6px; padding: 2px 10px; font-size: 12px" @click="openNodeConfig(node)">
+            View Config
+          </button>
+        </td>
         <td>
           <span
             class="badge"
@@ -343,5 +384,59 @@ onMounted(loadData)
         {{ pending ? 'Applying...' : 'Apply Now' }}
       </button>
     </div>
+  </DetailDrawer>
+
+  <DetailDrawer v-model="configDrawerOpen" :title="`Node Config - ${configNodeName || ''}`">
+    <div v-if="configLoading" class="muted">Loading...</div>
+    <template v-else-if="configDetail">
+      <article class="panel panel-pad" style="display: grid; gap: 8px; margin-bottom: 12px">
+        <strong>Target (generated)</strong>
+        <div class="muted">rev: r{{ configDetail.target?.rev || 0 }} | engine: {{ configDetail.target?.engine || '-' }}</div>
+        <div class="muted">sha256: {{ configDetail.target?.sha256 || '-' }}</div>
+        <div class="muted">created: {{ configUpdatedAt(configDetail.target) }}</div>
+        <div v-if="configDetail.target?.missing" class="badge warning">artifact missing in KV</div>
+
+        <label class="muted">manifest.json</label>
+        <textarea class="textarea" readonly :value="configDetail.target?.manifest_json || ''" style="min-height: 140px" />
+        <div style="display: flex; justify-content: flex-end">
+          <button class="btn btn-secondary" @click="copyText(configDetail.target?.manifest_json || '', 'target manifest')">
+            Copy
+          </button>
+        </div>
+
+        <label class="muted">{{ configDetail.target?.config_name || 'protocol config' }}</label>
+        <textarea class="textarea" readonly :value="configDetail.target?.config_text || ''" style="min-height: 240px" />
+        <div style="display: flex; justify-content: flex-end">
+          <button class="btn btn-secondary" @click="copyText(configDetail.target?.config_text || '', 'target config')">
+            Copy
+          </button>
+        </div>
+      </article>
+
+      <article class="panel panel-pad" style="display: grid; gap: 8px">
+        <strong>Current (running)</strong>
+        <div class="muted">rev: r{{ configDetail.current?.rev || 0 }} | engine: {{ configDetail.current?.engine || '-' }}</div>
+        <div class="muted">sha256: {{ configDetail.current?.sha256 || '-' }}</div>
+        <div class="muted">created: {{ configUpdatedAt(configDetail.current) }}</div>
+        <div v-if="configDetail.current?.missing" class="badge warning">artifact missing in KV</div>
+
+        <label class="muted">manifest.json</label>
+        <textarea class="textarea" readonly :value="configDetail.current?.manifest_json || ''" style="min-height: 140px" />
+        <div style="display: flex; justify-content: flex-end">
+          <button class="btn btn-secondary" @click="copyText(configDetail.current?.manifest_json || '', 'current manifest')">
+            Copy
+          </button>
+        </div>
+
+        <label class="muted">{{ configDetail.current?.config_name || 'protocol config' }}</label>
+        <textarea class="textarea" readonly :value="configDetail.current?.config_text || ''" style="min-height: 240px" />
+        <div style="display: flex; justify-content: flex-end">
+          <button class="btn btn-secondary" @click="copyText(configDetail.current?.config_text || '', 'current config')">
+            Copy
+          </button>
+        </div>
+      </article>
+    </template>
+    <div v-else class="muted">No config data</div>
   </DetailDrawer>
 </template>

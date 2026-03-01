@@ -8,6 +8,26 @@ export interface ArtifactSubscriptionOutbound {
   settings: Record<string, unknown>
 }
 
+export interface NodeArtifactConfigView {
+  id: string
+  rev: number
+  engine: string
+  sha256: string
+  missing: boolean
+  config_name: string
+  config_text: string
+  manifest_json: string
+  manifest_env: string
+  created_at: string
+}
+
+export interface NodeConfigDetail {
+  node_id: string
+  node_name: string
+  target: NodeArtifactConfigView | null
+  current: NodeArtifactConfigView | null
+}
+
 export interface NodeRecord {
   id: string
   name: string
@@ -21,8 +41,8 @@ export interface NodeRecord {
   cf_api_token?: string
   token: string
   online: boolean
-  desired_version: number
-  applied_version: number
+  target_version: number
+  current_version: number
   last_seen_at: string | null
   deploy_info: string
   protocol_app_version: string
@@ -32,7 +52,7 @@ export interface NodeRecord {
   memory_total_mb: number | null
   memory_usage_percent: number | null
   heartbeat_reported_at: string | null
-  desired_artifact: {
+  target_artifact: {
     id: string
     rev: number
     engine: string
@@ -44,7 +64,7 @@ export interface NodeRecord {
     subscription_outbounds: ArtifactSubscriptionOutbound[]
     created_at: string
   } | null
-  applied_artifact: {
+  current_artifact: {
     id: string
     rev: number
     engine: string
@@ -95,7 +115,7 @@ export interface ReleaseRecord {
     node_id: string
     node_name?: string
     status: 'queued' | 'failed'
-    desired_version?: number
+    target_version?: number
     artifact_id?: string
     artifact_sha256?: string
     engine?: string

@@ -529,7 +529,7 @@ enqueue_apply_event() {
   event_id="$(generate_event_id)"
   msg="$(json_escape "$message")"
   code_json="$(json_escape "$error_code")"
-  printf '{"event_id":"%s","type":"apply_result","status":"%s","applied_version":%s,"error_code":"%s","message":"%s","occurred_at":"%s"}\n' \
+  printf '{"event_id":"%s","type":"apply_result","status":"%s","current_version":%s,"error_code":"%s","message":"%s","occurred_at":"%s"}\n' \
     "$event_id" "$status" "$version" "$code_json" "$msg" "$now" >> "$EVENTS_FILE"
 }
 
@@ -587,7 +587,7 @@ apply_target_release() {
 }
 
 reconcile_once() {
-  local current_version response desired_version needs_update artifact_url artifact_sha256 engine reload_cmd
+  local current_version response target_version needs_update artifact_url artifact_sha256 engine reload_cmd
   current_version="$(read_current_version)"
 
   response="$(curl -fsS --max-time 20 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
@@ -596,7 +596,7 @@ reconcile_once() {
     return 1
   }
 
-  desired_version="$(json_number_field "desired_version" "$response")"
+  target_version="$(json_number_field "target_version" "$response")"
   needs_update="$(json_bool_field "needs_update" "$response")"
   artifact_url="$(json_string_field "artifact_url" "$response")"
   artifact_sha256="$(json_string_field "sha256" "$response")"
@@ -608,18 +608,18 @@ reconcile_once() {
     return 0
   fi
 
-  [[ -n "$desired_version" ]] || {
+  [[ -n "$target_version" ]] || {
     set_last_error "invalid reconcile response"
     enqueue_apply_event "failed" "$current_version" "invalid reconcile response" "E_RECONCILE"
     return 1
   }
 
-  if [[ "$desired_version" -le "$current_version" ]]; then
+  if [[ "$target_version" -le "$current_version" ]]; then
     clear_last_error
     return 0
   fi
 
-  apply_target_release "$desired_version" "$artifact_url" "$artifact_sha256" "$engine" "$reload_cmd"
+  apply_target_release "$target_version" "$artifact_url" "$artifact_sha256" "$engine" "$reload_cmd"
 }
 
 heartbeat_loop() {
@@ -673,7 +673,7 @@ case "$MODE" in
 esac
 EOF
 
-# Default apply hook: download -> verify -> stage -> validate -> atomic switch -> reload -> health -> rollback
+# Default apply hook: download -> verify -> stage -> validate -> atomic switch -> reload -> health
 cat > "$APPLY_HOOK" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -692,7 +692,6 @@ source "$CONFIG_FILE"
 RELEASES_DIR="$STATE_DIR/releases"
 STAGING_ROOT="$STATE_DIR/staging"
 CURRENT_LINK="$STATE_DIR/current"
-LAST_GOOD_LINK="$STATE_DIR/last-known-good"
 PROTO_PIDFILE="$STATE_DIR/protocol.pid"
 PROTO_LOG="$STATE_DIR/protocol.log"
 CERT_CRT="${CONFIG_ROOT}/cert/server.crt"
@@ -837,12 +836,11 @@ read_engine_from_manifest_env() {
 
 apply_release() {
   local rev="$1" artifact_url="$2" expected_sha="$3" engine_hint="$4" reload_cmd="$5"
-  local tmp_dir bundle_file actual_sha release_dir stage_dir old_release old_engine new_engine
+  local tmp_dir bundle_file actual_sha release_dir stage_dir new_engine
   tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t nodehub-apply)"
   bundle_file="$tmp_dir/bundle.txt"
   stage_dir="$STAGING_ROOT/r${rev}"
   release_dir="$RELEASES_DIR/r${rev}"
-  old_release="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
 
   curl -fsS --max-time 60 "$artifact_url" -H "X-Node-Token: $NODE_TOKEN" -o "$bundle_file" || fail_with "E_DOWNLOAD" "artifact download failed"
   actual_sha="$(calc_sha256_file "$bundle_file")"
@@ -860,26 +858,12 @@ apply_release() {
   ln -sfn "$release_dir" "$CURRENT_LINK"
 
   if [[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]]; then
-    sh -lc "$reload_cmd" >/dev/null 2>&1 || {
-      if [[ -n "$old_release" && -d "$old_release" ]]; then ln -sfn "$old_release" "$CURRENT_LINK"; fi
-      fail_with "E_RELOAD" "custom reload command failed"
-    }
+    sh -lc "$reload_cmd" >/dev/null 2>&1 || fail_with "E_RELOAD" "custom reload command failed"
   else
     stop_protocol
-    if ! start_protocol "$new_engine" "$release_dir"; then
-      if [[ -n "$old_release" && -d "$old_release" ]]; then
-        ln -sfn "$old_release" "$CURRENT_LINK"
-        old_engine="$(read_engine_from_manifest_env "$old_release")"
-        if [[ -n "$old_engine" ]]; then
-          stop_protocol || true
-          start_protocol "$old_engine" "$old_release" || true
-        fi
-      fi
-      fail_with "E_HEALTH" "failed to start new protocol process"
-    fi
+    start_protocol "$new_engine" "$release_dir" || fail_with "E_HEALTH" "failed to start new protocol process"
   fi
 
-  ln -sfn "$release_dir" "$LAST_GOOD_LINK"
   rm -rf "$tmp_dir"
 }
 

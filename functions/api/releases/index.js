@@ -60,10 +60,10 @@ async function collectReferencedArtifactIds(kv) {
   for (const node of nodes) {
     if (!node || typeof node !== 'object') continue
 
-    const desiredId = String(node.desired_artifact?.id || '').trim()
-    const appliedId = String(node.applied_artifact?.id || '').trim()
-    if (desiredId) ids.add(desiredId)
-    if (appliedId) ids.add(appliedId)
+    const targetId = String((node.target_artifact || {}).id || '').trim()
+    const currentId = String((node.current_artifact || {}).id || '').trim()
+    if (targetId) ids.add(targetId)
+    if (currentId) ids.add(currentId)
   }
 
   return ids
@@ -139,7 +139,7 @@ export async function onRequestPost({ request, env }) {
       continue
     }
 
-    const nextVersion = Math.max(Number(node.desired_version || 0), Number(node.applied_version || 0)) + 1
+    const nextVersion = Math.max(0, Number(node.target_version || 0) || 0) + 1
 
     try {
       const artifact = await buildNodeArtifactBundle({
@@ -163,8 +163,7 @@ export async function onRequestPost({ request, env }) {
         created_at: now,
       })
 
-      node.desired_version = nextVersion
-      node.desired_artifact = {
+      const targetArtifact = {
         id: artifactId,
         rev: artifact.rev,
         engine: artifact.engine,
@@ -176,6 +175,9 @@ export async function onRequestPost({ request, env }) {
         subscription_outbounds: artifact.subscription_outbounds || [],
         created_at: now,
       }
+      node.target_version = nextVersion
+      node.current_version = Math.max(0, Number(node.current_version || 0) || 0)
+      node.target_artifact = targetArtifact
       node.last_release_status = 'pending'
       node.last_release_error_code = ''
       node.last_release_message = `artifact queued r${nextVersion}`
@@ -186,7 +188,7 @@ export async function onRequestPost({ request, env }) {
         node_id: node.id,
         node_name: node.name,
         status: 'queued',
-        desired_version: nextVersion,
+        target_version: nextVersion,
         artifact_id: artifactId,
         artifact_sha256: artifact.sha256,
         engine: artifact.engine,

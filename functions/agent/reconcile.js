@@ -14,27 +14,30 @@ export async function onRequestGet({ request, env }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.token !== token) return fail('UNAUTHORIZED', 'Invalid node token', 401)
 
-  const desiredArtifact =
-    node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
-      ? node.desired_artifact
+  const targetArtifact =
+    node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
+      ? node.target_artifact
       : null
-  const desiredVersion = desiredArtifact ? Number(desiredArtifact.rev || 0) : Number(node.desired_version || 0)
+  const targetVersion = targetArtifact
+    ? Number(targetArtifact.rev || 0)
+    : Number(node.target_version || 0)
+  const currentVersion = Number(node.current_version || 0) || 0
 
   const origin = new URL(request.url).origin
   const artifactUrl =
-    desiredArtifact && desiredVersion > 0
-      ? `${origin}/agent/artifact?node_id=${encodeURIComponent(node.id)}&rev=${encodeURIComponent(desiredVersion)}`
+    targetArtifact && targetVersion > 0
+      ? `${origin}/agent/artifact?node_id=${encodeURIComponent(node.id)}&rev=${encodeURIComponent(targetVersion)}`
       : ''
 
   return ok({
     node_id: node.id,
-    current_version: Number(node.applied_version || 0),
-    desired_version: desiredVersion,
-    rev: desiredVersion,
+    current_version: currentVersion,
+    target_version: targetVersion,
+    rev: targetVersion,
     artifact_url: artifactUrl,
-    sha256: desiredArtifact ? String(desiredArtifact.sha256 || '') : '',
-    engine: desiredArtifact ? String(desiredArtifact.engine || '') : '',
-    reload_cmd: desiredArtifact ? String(desiredArtifact.reload_cmd || '') : '',
-    needs_update: desiredVersion > Number(node.applied_version || 0),
+    sha256: targetArtifact ? String(targetArtifact.sha256 || '') : '',
+    engine: targetArtifact ? String(targetArtifact.engine || '') : '',
+    reload_cmd: targetArtifact ? String(targetArtifact.reload_cmd || '') : '',
+    needs_update: targetVersion > currentVersion,
   })
 }

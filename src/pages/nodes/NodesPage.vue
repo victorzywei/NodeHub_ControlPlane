@@ -239,7 +239,7 @@ onMounted(loadNodesData)
             {{ node.online ? '在线' : '离线' }}
           </span>
         </td>
-        <td>v{{ node.applied_version }} -> v{{ node.desired_version }}</td>
+        <td>v{{ node.current_version }} -> v{{ node.target_version }}</td>
         <td>{{ formatRelative(node.last_seen_at) }}</td>
         <td>
           <div style="display: flex; gap: 6px">

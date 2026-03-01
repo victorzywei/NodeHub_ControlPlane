@@ -16,14 +16,14 @@ export async function onRequestGet({ request, env }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.token !== token) return fail('UNAUTHORIZED', 'Invalid node token', 401)
 
-  const desiredArtifact =
-    node.desired_artifact && typeof node.desired_artifact === 'object' && !Array.isArray(node.desired_artifact)
-      ? node.desired_artifact
+  const targetArtifact =
+    node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
+      ? node.target_artifact
       : null
-  if (!desiredArtifact) return fail('NOT_FOUND', 'Artifact not found', 404)
-  if (Number(desiredArtifact.rev || 0) !== rev) return fail('NOT_FOUND', 'Artifact revision mismatch', 404)
+  if (!targetArtifact) return fail('NOT_FOUND', 'Artifact not found', 404)
+  if (Number(targetArtifact.rev || 0) !== rev) return fail('NOT_FOUND', 'Artifact revision mismatch', 404)
 
-  const artifactId = String(desiredArtifact.id || '')
+  const artifactId = String(targetArtifact.id || '')
   if (!artifactId) return fail('NOT_FOUND', 'Artifact id missing', 404)
 
   const artifact = await kvGetJson(kv, KEY.artifact(artifactId), null)
