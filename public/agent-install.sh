@@ -74,6 +74,12 @@ wrap_url() {
   fi
 }
 
+# Direct URL without mirror (for API requests)
+direct_url() {
+  local url="$1"
+  printf '%s' "$url"
+}
+
 # Install packages if possible (best-effort)
 install_pkgs() {
   # $@ = packages
@@ -277,11 +283,15 @@ install_xray() {
 
 # ---------- Install sing-box ----------
 # Use GitHub API to get latest tag; parse without jq.
+# API requests always go direct (no mirror) to avoid API proxy issues
 get_latest_github_tag() {
-  # $1=owner/repo
+  # $1=owner/repo, $2=fallback_version (optional)
   local repo="$1"
+  local fallback="${2:-}"
   local api tag
-  api="$(wrap_url "https://api.github.com/repos/${repo}/releases/latest")"
+  
+  # Always use direct API URL (no mirror for API requests)
+  api="$(direct_url "https://api.github.com/repos/${repo}/releases/latest")"
   
   # Try multiple parsing methods for robustness
   tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
@@ -292,10 +302,17 @@ get_latest_github_tag() {
   fi
   
   # Fallback: use redirect URL method (more reliable, no API limit)
+  # This also uses direct URL without mirror
   if [[ -z "$tag" || "$tag" == *"{"* ]]; then
     local redirect_url
-    redirect_url="$(wrap_url "https://github.com/${repo}/releases/latest")"
+    redirect_url="$(direct_url "https://github.com/${repo}/releases/latest")"
     tag="$(curl -fsSL -I "$redirect_url" 2>/dev/null | grep -i '^location:' | sed 's/.*\/tag\/\([^[:space:]]*\).*/\1/' | tr -d '\r\n')"
+  fi
+  
+  # If all methods failed and fallback version provided, use it
+  if [[ -z "$tag" || "$tag" == *"{"* ]] && [[ -n "$fallback" ]]; then
+    warn "Failed to detect latest release tag from GitHub API, using fallback version: $fallback"
+    tag="$fallback"
   fi
   
   echo "$tag"
@@ -310,18 +327,20 @@ install_singbox() {
   require_or_install tar tar || die "tar is required to install sing-box."
 
   local tag
-  tag="$(get_latest_github_tag "SagerNet/sing-box" || true)"
-  [[ -n "$tag" && "$tag" != "latest" ]] || die "Failed to detect sing-box latest release tag."
+  # Use fallback version v1.13.0 if API fails
+  tag="$(get_latest_github_tag "SagerNet/sing-box" "v1.13.0" || echo "v1.13.0")"
+  [[ -n "$tag" && "$tag" != "latest" ]] || tag="v1.13.0"
 
   local ver="${tag#v}"
   local tarname="sing-box-${ver}-linux-${SINGBOX_ARCH}.tar.gz"
   local url
+  # File download uses mirror if configured
   url="$(wrap_url "https://github.com/SagerNet/sing-box/releases/download/${tag}/${tarname}")"
 
   cleanup_dir="$(mktempdir)"
   local tgz="${cleanup_dir}/sing-box.tar.gz"
 
-  log "Downloading sing-box: $url"
+  log "Downloading sing-box ${tag}: $url"
   curl -fsSL -o "$tgz" "$url" || die "Failed to download sing-box from: $url"
 
   tar -xzf "$tgz" -C "$cleanup_dir" || die "Failed to extract sing-box tarball."
@@ -763,7 +782,8 @@ EOF
 fi
 
 # ---------- SSL certificate issuance (optional) ----------
-# Try acme.sh first (if openssl available), fallback to lego
+# Priority: acme.sh (if openssl available) > lego (standalone, no deps)
+# acme.sh is preferred because it's more mature and feature-rich
 issue_certs() {
   [[ -n "$TLS_DOMAIN" || -n "$TLS_DOMAIN_ALT" ]] || return 0
 
@@ -771,6 +791,7 @@ issue_certs() {
 
   # Try acme.sh first if openssl is available
   if need_cmd openssl; then
+    log "openssl detected, using acme.sh (preferred method)..."
     if issue_certs_acme; then
       return 0
     fi
@@ -806,6 +827,7 @@ issue_certs_acme() {
     local acme_repo_url="https://github.com/acmesh-official/acme.sh/archive/refs/heads/master.tar.gz"
     local acme_tarball="${cleanup_dir}/acme.sh.tar.gz"
     local repo_url
+    # File download uses mirror if configured
     repo_url="$(wrap_url "$acme_repo_url")"
     
     if ! curl -fsSL "$repo_url" -o "$acme_tarball" 2>/dev/null; then
@@ -918,13 +940,14 @@ issue_certs_lego() {
         ;;
     esac
     
-    # Get latest lego version
+    # Get latest lego version (use direct API, fallback to v4.32.0)
     local lego_version
-    lego_version="$(curl -fsSL "$(wrap_url "https://api.github.com/repos/go-acme/lego/releases/latest")" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "v4.20.4")"
-    [[ -z "$lego_version" || "$lego_version" == *"{"* ]] && lego_version="v4.20.4"
+    lego_version="$(curl -fsSL "$(direct_url "https://api.github.com/repos/go-acme/lego/releases/latest")" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "v4.32.0")"
+    [[ -z "$lego_version" || "$lego_version" == *"{"* ]] && lego_version="v4.32.0"
     
     local lego_tarball="lego_${lego_version}_linux_${LEGO_ARCH}.tar.gz"
     local lego_url
+    # File download uses mirror if configured
     lego_url="$(wrap_url "https://github.com/go-acme/lego/releases/download/${lego_version}/${lego_tarball}")"
     
     cleanup_dir="$(mktempdir)"
