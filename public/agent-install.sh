@@ -852,13 +852,14 @@ issue_certs_acme() {
       --home "$ACME_SH_DIR" \
       --config-home "${ACME_SH_DIR}/data" \
       --cert-home "${ACME_SH_DIR}/certs" \
-      --accountemail "admin@${MAIN_DOMAIN}" \
-      --nocron 2>/dev/null; then
+      --accountemail "admin@${MAIN_DOMAIN}" 2>/dev/null; then
       cd - >/dev/null || true
       warn "acme.sh installation failed"
       return 1
     fi
     cd - >/dev/null || true
+    
+    log "acme.sh installed, auto-renewal enabled via cron"
   fi
 
   [[ -x "$ACME_SH_EXEC" ]] || {
@@ -1039,3 +1040,15 @@ issue_certs_lego() {
 issue_certs || true
 
 log "Done."
+log "================================================"
+log "Certificate Auto-Renewal Information:"
+log "================================================"
+if need_cmd openssl && [[ -x "${ACME_SH_DIR:-/root/.acme.sh}/acme.sh" ]]; then
+  log "acme.sh is installed with automatic renewal enabled."
+  log "Certificates will be checked and renewed daily via cron."
+  log "Check renewal status: ${ACME_SH_DIR:-/root/.acme.sh}/acme.sh --list"
+elif [[ -x "/usr/local/bin/lego" ]] || [[ -x "${HOME}/.local/bin/lego" ]]; then
+  log "lego is installed. For auto-renewal, add a cron job:"
+  log "  0 0 * * * /usr/local/bin/lego --path /etc/nodehub-agent/.lego renew --days 30"
+fi
+log "================================================"
