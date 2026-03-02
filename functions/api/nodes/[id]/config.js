@@ -37,17 +37,48 @@ function parseBundleFiles(bundleText) {
   return files
 }
 
-function extractConfigFile(files, engineHint) {
-  if (files['sing-box.json']) {
-    return { name: 'sing-box.json', text: String(files['sing-box.json'] || '') }
+function parseManifestEnv(text) {
+  const result = {}
+  const lines = String(text || '').split(/\r?\n/)
+  for (const line of lines) {
+    const raw = String(line || '')
+    if (!raw || raw.startsWith('#')) continue
+    const idx = raw.indexOf('=')
+    if (idx <= 0) continue
+    const key = raw.slice(0, idx).trim()
+    const value = raw.slice(idx + 1).trim()
+    if (!key) continue
+    result[key] = value
   }
-  if (files['xray.json']) {
-    return { name: 'xray.json', text: String(files['xray.json'] || '') }
-  }
+  return result
+}
+
+function parseCsvList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function buildConfigViews(files) {
+  return [
+    { engine: 'sing-box', config_name: 'sing-box.json' },
+    { engine: 'xray', config_name: 'xray.json' },
+  ].map((item) => ({
+    ...item,
+    config_text: Object.prototype.hasOwnProperty.call(files, item.config_name) ? String(files[item.config_name] || '') : 'null\n',
+  }))
+}
+
+function pickPrimaryConfig(configs, engineHint) {
+  const rows = Array.isArray(configs) ? configs : []
+  if (rows.length === 0) return { config_name: '', config_text: '' }
 
   const hint = String(engineHint || '').toLowerCase()
-  if (hint === 'xray') return { name: 'xray.json', text: '' }
-  return { name: 'sing-box.json', text: '' }
+  if (hint === 'xray') return rows.find((item) => item.engine === 'xray') || rows[0]
+  if (hint === 'sing-box') return rows.find((item) => item.engine === 'sing-box') || rows[0]
+
+  return rows.find((item) => item.config_text !== 'null\n') || rows[0]
 }
 
 async function buildArtifactView(kv, nodeId, artifactRef) {
@@ -62,25 +93,41 @@ async function buildArtifactView(kv, nodeId, artifactRef) {
       id: artifactId,
       rev: Number(artifactRef.rev || 0),
       engine: String(artifactRef.engine || ''),
+      engines: Array.isArray(artifactRef.engines) ? artifactRef.engines.map((item) => String(item)) : [],
+      action_sing_box: String(artifactRef.action_sing_box || ''),
+      action_xray: String(artifactRef.action_xray || ''),
       sha256: String(artifactRef.sha256 || ''),
       missing: true,
       config_name: '',
       config_text: '',
+      configs: [],
       created_at: '',
     }
   }
 
   const files = parseBundleFiles(artifact.bundle)
-  const configFile = extractConfigFile(files, artifact.engine || artifactRef.engine)
+  const manifestEnv = parseManifestEnv(files['manifest.env'] || '')
+  const configs = buildConfigViews(files)
+  const configFile = pickPrimaryConfig(configs, artifact.engine || artifactRef.engine)
+  const engines =
+    Array.isArray(artifact.engines) && artifact.engines.length > 0
+      ? artifact.engines.map((item) => String(item))
+      : parseCsvList(manifestEnv.ENGINES)
+  const actionSingBox = String(artifact.action_sing_box || manifestEnv.ACTION_SING_BOX || '')
+  const actionXray = String(artifact.action_xray || manifestEnv.ACTION_XRAY || '')
 
   return {
     id: String(artifact.id || artifactId),
     rev: Number(artifact.rev || artifactRef.rev || 0),
     engine: String(artifact.engine || artifactRef.engine || ''),
+    engines,
+    action_sing_box: actionSingBox,
+    action_xray: actionXray,
     sha256: String(artifact.sha256 || artifactRef.sha256 || ''),
     missing: false,
-    config_name: configFile.name,
-    config_text: configFile.text,
+    config_name: configFile.config_name,
+    config_text: configFile.config_text,
+    configs,
     created_at: String(artifact.created_at || artifactRef.created_at || ''),
   }
 }

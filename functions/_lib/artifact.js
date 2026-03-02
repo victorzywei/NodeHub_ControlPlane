@@ -410,12 +410,28 @@ function buildSubscriptionOutbounds(templates, params) {
   })
 }
 
-function buildManifest({ nodeId, rev, engine, operationId, templateNames, params, summary, subscriptionOutbounds, createdAt }) {
+function buildManifest({
+  nodeId,
+  rev,
+  engine,
+  engines,
+  actionSingBox,
+  actionXray,
+  operationId,
+  templateNames,
+  params,
+  summary,
+  subscriptionOutbounds,
+  createdAt,
+}) {
   return {
     schema: 'nodehub-artifact-v1',
     node_id: nodeId,
     rev,
     engine,
+    engines,
+    action_sing_box: actionSingBox,
+    action_xray: actionXray,
     operation_id: operationId,
     template_names: templateNames,
     params,
@@ -431,6 +447,9 @@ function toManifestEnv(manifest) {
     `NODE_ID=${manifest.node_id}`,
     `REV=${manifest.rev}`,
     `ENGINE=${manifest.engine}`,
+    `ENGINES=${Array.isArray(manifest.engines) ? manifest.engines.join(',') : ''}`,
+    `ACTION_SING_BOX=${manifest.action_sing_box || ''}`,
+    `ACTION_XRAY=${manifest.action_xray || ''}`,
     `OPERATION_ID=${manifest.operation_id}`,
     `SUMMARY=${(manifest.summary || '').replace(/\r?\n/g, ' ')}`,
     `CREATED_AT=${manifest.created_at}`,
@@ -445,16 +464,22 @@ function buildBundleText({ rev, engine, reloadCmd, files }) {
   return lines.join('\n') + '\n'
 }
 
+function buildConfigObject(engine, templates, params) {
+  if (engine === 'xray') return buildXrayConfig(templates, params)
+  return buildSingboxConfig(templates, params)
+}
+
 function buildConfigFile(engine, templates, params) {
+  const config = buildConfigObject(engine, templates, params)
   if (engine === 'xray') {
     return {
       path: 'xray.json',
-      content: JSON.stringify(buildXrayConfig(templates, params), null, 2) + '\n',
+      content: JSON.stringify(config, null, 2) + '\n',
     }
   }
   return {
     path: 'sing-box.json',
-    content: JSON.stringify(buildSingboxConfig(templates, params), null, 2) + '\n',
+    content: JSON.stringify(config, null, 2) + '\n',
   }
 }
 
@@ -468,17 +493,46 @@ export function buildNodeConfigPreview({ templates, params = {}, engine }) {
   }
 }
 
-export async function buildNodeArtifactBundle({ node, rev, operationId, templates, params, createdAt, engine }) {
-  const templateNames = templates.map((item) => item.name)
+function buildTemplateGroups({ templates, templateGroups, engine }) {
+  if (Array.isArray(templateGroups) && templateGroups.length > 0) {
+    return templateGroups
+      .map((group) => ({
+        engine: normalizeEngine(group.engine),
+        templates: Array.isArray(group.templates) ? group.templates : [],
+      }))
+      .filter((group) => group.templates.length > 0)
+  }
+
+  return [
+    {
+      engine: normalizeEngine(engine || templates[0]?.engine),
+      templates: Array.isArray(templates) ? templates : [],
+    },
+  ].filter((group) => group.templates.length > 0)
+}
+
+function getGroupAction(groups, engine) {
+  return groups.some((group) => group.engine === engine && group.templates.length > 0) ? 'apply' : 'stop'
+}
+
+export async function buildNodeArtifactBundle({ node, rev, operationId, templates, templateGroups, params, createdAt, engine }) {
+  const groups = buildTemplateGroups({ templates, templateGroups, engine })
+  const allTemplates = groups.flatMap((group) => group.templates)
+  const templateNames = allTemplates.map((item) => item.name)
   const summary = summarizeConfig(templateNames, params)
-  const selectedEngine = normalizeEngine(engine || templates[0]?.engine)
+  const selectedEngine = groups.length === 1 ? normalizeEngine(groups[0]?.engine || engine) : 'multi'
+  const engines = groups.map((group) => group.engine)
+  const actionSingBox = getGroupAction(groups, 'sing-box')
+  const actionXray = getGroupAction(groups, 'xray')
   const reloadCmd = 'nodehub-protocol-restart'
-  const configFile = buildConfigFile(selectedEngine, templates, params)
-  const subscriptionOutbounds = buildSubscriptionOutbounds(templates, params)
+  const subscriptionOutbounds = buildSubscriptionOutbounds(allTemplates, params)
   const manifest = buildManifest({
     nodeId: node.id,
     rev,
     engine: selectedEngine,
+    engines,
+    actionSingBox,
+    actionXray,
     operationId,
     templateNames,
     params,
@@ -490,8 +544,11 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
   const files = [
     { path: 'manifest.json', content: JSON.stringify(manifest, null, 2) + '\n' },
     { path: 'manifest.env', content: toManifestEnv(manifest) },
-    configFile,
   ]
+
+  for (const group of groups) {
+    files.push(buildConfigFile(group.engine, group.templates, params))
+  }
 
   const bundle = buildBundleText({ rev, engine: selectedEngine, reloadCmd, files })
   const sha256 = await sha256Hex(bundle)
@@ -499,6 +556,9 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
   return {
     rev,
     engine: selectedEngine,
+    engines,
+    action_sing_box: actionSingBox,
+    action_xray: actionXray,
     reload_cmd: reloadCmd,
     sha256,
     summary,

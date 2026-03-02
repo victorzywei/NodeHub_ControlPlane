@@ -551,7 +551,7 @@ flush_pending_events() {
 }
 
 apply_target_release() {
-  local target_version="$1" artifact_url="$2" artifact_sha256="$3" engine="$4" reload_cmd="$5"
+  local target_version="$1" artifact_url="$2" artifact_sha256="$3" reload_cmd="$4"
   [[ -n "$artifact_url" && -n "$artifact_sha256" ]] || {
     set_last_error "reconcile payload missing artifact"
     enqueue_apply_event "failed" "$target_version" "artifact metadata missing" "E_RECONCILE"
@@ -565,7 +565,7 @@ apply_target_release() {
   fi
 
   local output="" err_code="" err_message=""
-  if ! output="$("$APPLY_HOOK" "$target_version" "$artifact_url" "$artifact_sha256" "$engine" "$reload_cmd" 2>&1)"; then
+  if ! output="$("$APPLY_HOOK" "$target_version" "$artifact_url" "$artifact_sha256" "$reload_cmd" 2>&1)"; then
     err_code="$(printf '%s\n' "$output" | awk -F= '/^ERROR_CODE=/{ print $2; exit }')"
     err_message="$(printf '%s\n' "$output" | awk -F= '/^ERROR_MESSAGE=/{ print substr($0, index($0, "=") + 1); exit }')"
     [[ -n "$err_code" ]] || err_code="E_APPLY"
@@ -587,7 +587,7 @@ apply_target_release() {
 }
 
 reconcile_once() {
-  local current_version response target_version needs_update artifact_url artifact_sha256 engine reload_cmd
+  local current_version response target_version needs_update artifact_url artifact_sha256 reload_cmd
   current_version="$(read_current_version)"
 
   response="$(curl -fsS --max-time 20 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
@@ -600,7 +600,6 @@ reconcile_once() {
   needs_update="$(json_bool_field "needs_update" "$response")"
   artifact_url="$(json_string_field "artifact_url" "$response")"
   artifact_sha256="$(json_string_field "sha256" "$response")"
-  engine="$(json_string_field "engine" "$response")"
   reload_cmd="$(json_string_field "reload_cmd" "$response")"
 
   if [[ "$needs_update" != "true" ]]; then
@@ -619,7 +618,7 @@ reconcile_once() {
     return 0
   fi
 
-  apply_target_release "$target_version" "$artifact_url" "$artifact_sha256" "$engine" "$reload_cmd"
+  apply_target_release "$target_version" "$artifact_url" "$artifact_sha256" "$reload_cmd"
 }
 
 heartbeat_loop() {
@@ -681,8 +680,7 @@ set -euo pipefail
 TARGET_REV="${1:-}"
 ARTIFACT_URL="${2:-}"
 EXPECTED_SHA256="${3:-}"
-ENGINE_HINT="${4:-}"
-RELOAD_CMD="${5:-}"
+RELOAD_CMD="${4:-}"
 
 CONFIG_FILE="__NODEHUB_CONFIG_FILE__"
 [[ -f "$CONFIG_FILE" ]] || { echo "ERROR_CODE=E_CONFIG"; echo "ERROR_MESSAGE=config file missing"; exit 1; }
@@ -692,8 +690,7 @@ source "$CONFIG_FILE"
 RELEASES_DIR="$STATE_DIR/releases"
 STAGING_ROOT="$STATE_DIR/staging"
 CURRENT_LINK="$STATE_DIR/current"
-PROTO_PIDFILE="$STATE_DIR/protocol.pid"
-PROTO_LOG="$STATE_DIR/protocol.log"
+PROTO_PIDFILE_LEGACY="$STATE_DIR/protocol.pid"
 CERT_CRT="${CONFIG_ROOT}/cert/server.crt"
 CERT_KEY="${CONFIG_ROOT}/cert/server.key"
 
@@ -767,9 +764,61 @@ extract_bundle() {
   done < "$bundle_file"
 }
 
-stop_protocol() {
+pidfile_for_engine() {
+  local engine="$1"
+  case "$engine" in
+    sing-box) printf '%s\n' "$STATE_DIR/protocol-sing-box.pid" ;;
+    xray) printf '%s\n' "$STATE_DIR/protocol-xray.pid" ;;
+    *) return 1 ;;
+  esac
+}
+
+logfile_for_engine() {
+  local engine="$1"
+  case "$engine" in
+    sing-box) printf '%s\n' "$STATE_DIR/protocol-sing-box.log" ;;
+    xray) printf '%s\n' "$STATE_DIR/protocol-xray.log" ;;
+    *) return 1 ;;
+  esac
+}
+
+revfile_for_engine() {
+  local engine="$1"
+  case "$engine" in
+    sing-box) printf '%s\n' "$STATE_DIR/protocol-sing-box.rev" ;;
+    xray) printf '%s\n' "$STATE_DIR/protocol-xray.rev" ;;
+    *) return 1 ;;
+  esac
+}
+
+clear_engine_rev() {
+  local engine="$1" revfile=""
+  revfile="$(revfile_for_engine "$engine")" || return 0
+  rm -f "$revfile"
+}
+
+mark_engine_rev() {
+  local engine="$1" rev="$2" revfile=""
+  revfile="$(revfile_for_engine "$engine")" || return 1
+  printf '%s\n' "$rev" > "$revfile"
+}
+
+is_engine_running_rev() {
+  local engine="$1" rev="$2" pidfile="" revfile="" pid="" active_rev=""
+  pidfile="$(pidfile_for_engine "$engine")" || return 1
+  revfile="$(revfile_for_engine "$engine")" || return 1
+
+  [[ -f "$pidfile" && -f "$revfile" ]] || return 1
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  active_rev="$(cat "$revfile" 2>/dev/null || true)"
+  [[ -n "$pid" && "$active_rev" == "$rev" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+stop_pidfile_process() {
+  local pidfile="$1"
   local pid=""
-  [[ -f "$PROTO_PIDFILE" ]] && pid="$(cat "$PROTO_PIDFILE" 2>/dev/null || true)" || true
+  [[ -f "$pidfile" ]] && pid="$(cat "$pidfile" 2>/dev/null || true)" || true
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null || true
     for _ in 1 2 3 4 5; do
@@ -778,33 +827,51 @@ stop_protocol() {
     done
     kill -9 "$pid" 2>/dev/null || true
   fi
-  rm -f "$PROTO_PIDFILE"
+  rm -f "$pidfile"
 }
 
-start_protocol() {
-  local engine="$1" release_dir="$2" config_file=""
+stop_legacy_protocol() {
+  stop_pidfile_process "$PROTO_PIDFILE_LEGACY"
+}
+
+stop_protocol_engine() {
+  local engine="$1" pidfile=""
+  pidfile="$(pidfile_for_engine "$engine")" || return 0
+  stop_pidfile_process "$pidfile"
+  clear_engine_rev "$engine"
+}
+
+start_protocol_engine() {
+  local engine="$1" release_dir="$2"
+  local config_file="" pidfile="" logfile=""
+  pidfile="$(pidfile_for_engine "$engine")" || return 15
+  logfile="$(logfile_for_engine "$engine")" || return 15
+
+  mkdir -p "$(dirname "$pidfile")"
+  mkdir -p "$(dirname "$logfile")"
+
   if [[ "$engine" == "sing-box" ]]; then
     config_file="$release_dir/sing-box.json"
     [[ -f "$config_file" ]] || return 11
     command -v sing-box >/dev/null 2>&1 || return 12
-    nohup sing-box run -c "$config_file" > "$PROTO_LOG" 2>&1 &
+    nohup sing-box run -c "$config_file" > "$logfile" 2>&1 &
   elif [[ "$engine" == "xray" ]]; then
     config_file="$release_dir/xray.json"
     [[ -f "$config_file" ]] || return 13
     command -v xray >/dev/null 2>&1 || return 14
-    nohup xray run -config "$config_file" > "$PROTO_LOG" 2>&1 &
+    nohup xray run -config "$config_file" > "$logfile" 2>&1 &
   else
     return 15
   fi
 
   local pid="$!"
-  echo "$pid" > "$PROTO_PIDFILE"
+  echo "$pid" > "$pidfile"
   sleep 1
   kill -0 "$pid" 2>/dev/null || return 16
   return 0
 }
 
-validate_release() {
+validate_release_engine() {
   local engine="$1" release_dir="$2"
   if [[ "$engine" == "sing-box" ]]; then
     [[ -f "$release_dir/sing-box.json" ]] || fail_with "E_VALIDATE" "sing-box.json missing"
@@ -827,16 +894,37 @@ validate_release() {
   fail_with "E_VALIDATE" "unsupported engine: $engine"
 }
 
-read_engine_from_manifest_env() {
-  local release_dir="$1" mf
+read_manifest_field() {
+  local release_dir="$1" key="$2" mf
   mf="$release_dir/manifest.env"
   [[ -f "$mf" ]] || return 0
-  awk -F= '$1=="ENGINE"{ print $2; exit }' "$mf"
+  awk -F= -v target="$key" '$1==target{ print $2; exit }' "$mf"
+}
+
+normalize_action() {
+  local action="$1"
+  case "$action" in
+    apply|stop) printf '%s\n' "$action" ;;
+    '') printf '%s\n' "" ;;
+    *) fail_with "E_PARSE" "invalid action value: $action" ;;
+  esac
+}
+
+resolve_engine_actions() {
+  local release_dir="$1"
+  local action_sing_box="" action_xray=""
+  action_sing_box="$(normalize_action "$(read_manifest_field "$release_dir" "ACTION_SING_BOX")")"
+  action_xray="$(normalize_action "$(read_manifest_field "$release_dir" "ACTION_XRAY")")"
+
+  [[ -n "$action_sing_box" ]] || fail_with "E_PARSE" "ACTION_SING_BOX missing in bundle"
+  [[ -n "$action_xray" ]] || fail_with "E_PARSE" "ACTION_XRAY missing in bundle"
+  printf '%s|%s\n' "$action_sing_box" "$action_xray"
 }
 
 apply_release() {
-  local rev="$1" artifact_url="$2" expected_sha="$3" engine_hint="$4" reload_cmd="$5"
-  local tmp_dir bundle_file actual_sha release_dir stage_dir new_engine
+  local rev="$1" artifact_url="$2" expected_sha="$3" reload_cmd="$4"
+  local tmp_dir bundle_file actual_sha release_dir stage_dir action_result
+  local action_sing_box action_xray
   tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t nodehub-apply)"
   bundle_file="$tmp_dir/bundle.txt"
   stage_dir="$STAGING_ROOT/r${rev}"
@@ -847,11 +935,16 @@ apply_release() {
   [[ -n "$actual_sha" && "$actual_sha" == "$expected_sha" ]] || fail_with "E_HASH" "artifact sha256 mismatch"
 
   extract_bundle "$bundle_file" "$stage_dir"
-  new_engine="$(read_engine_from_manifest_env "$stage_dir")"
-  [[ -n "$new_engine" ]] || new_engine="$engine_hint"
-  [[ -n "$new_engine" ]] || fail_with "E_PARSE" "engine missing in bundle"
+  action_result="$(resolve_engine_actions "$stage_dir")"
+  action_sing_box="${action_result%%|*}"
+  action_xray="${action_result#*|}"
 
-  validate_release "$new_engine" "$stage_dir"
+  if [[ "$action_sing_box" == "apply" ]]; then
+    validate_release_engine "sing-box" "$stage_dir"
+  fi
+  if [[ "$action_xray" == "apply" ]]; then
+    validate_release_engine "xray" "$stage_dir"
+  fi
 
   rm -rf "$release_dir"
   mv "$stage_dir" "$release_dir"
@@ -860,15 +953,34 @@ apply_release() {
   if [[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]]; then
     sh -lc "$reload_cmd" >/dev/null 2>&1 || fail_with "E_RELOAD" "custom reload command failed"
   else
-    stop_protocol
-    start_protocol "$new_engine" "$release_dir" || fail_with "E_HEALTH" "failed to start new protocol process"
+    stop_legacy_protocol
+    if [[ "$action_sing_box" == "stop" ]]; then
+      stop_protocol_engine "sing-box"
+    fi
+    if [[ "$action_xray" == "stop" ]]; then
+      stop_protocol_engine "xray"
+    fi
+    if [[ "$action_sing_box" == "apply" ]]; then
+      if ! is_engine_running_rev "sing-box" "$rev"; then
+        stop_protocol_engine "sing-box"
+        start_protocol_engine "sing-box" "$release_dir" || fail_with "E_HEALTH" "failed to start sing-box process"
+        mark_engine_rev "sing-box" "$rev" || fail_with "E_STATE" "failed to persist sing-box revision marker"
+      fi
+    fi
+    if [[ "$action_xray" == "apply" ]]; then
+      if ! is_engine_running_rev "xray" "$rev"; then
+        stop_protocol_engine "xray"
+        start_protocol_engine "xray" "$release_dir" || fail_with "E_HEALTH" "failed to start xray process"
+        mark_engine_rev "xray" "$rev" || fail_with "E_STATE" "failed to persist xray revision marker"
+      fi
+    fi
   fi
 
   rm -rf "$tmp_dir"
 }
 
 [[ -n "$TARGET_REV" && -n "$ARTIFACT_URL" && -n "$EXPECTED_SHA256" ]] || fail_with "E_ARGS" "missing apply arguments"
-apply_release "$TARGET_REV" "$ARTIFACT_URL" "$EXPECTED_SHA256" "$ENGINE_HINT" "$RELOAD_CMD"
+apply_release "$TARGET_REV" "$ARTIFACT_URL" "$EXPECTED_SHA256" "$RELOAD_CMD"
 echo "ERROR_CODE="
 echo "ERROR_MESSAGE="
 exit 0

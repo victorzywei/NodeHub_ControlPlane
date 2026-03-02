@@ -18,6 +18,31 @@ function uniqStringArray(values) {
   return result
 }
 
+function normalizePort(value, fallback = 443) {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return fallback
+  const port = Math.floor(num)
+  if (port < 1 || port > 65535) return fallback
+  return port
+}
+
+function ensureUniqueTemplatePorts(templates) {
+  const byPort = new Map()
+  for (const template of templates) {
+    const port = normalizePort(template?.defaults?.port, 443)
+    if (!byPort.has(port)) byPort.set(port, [])
+    byPort.get(port).push(template)
+  }
+
+  const duplicated = Array.from(byPort.entries()).filter(([, rows]) => rows.length > 1)
+  if (duplicated.length === 0) return
+
+  const message = duplicated
+    .map(([port, rows]) => `${port}(${rows.map((row) => row.name || row.id).join('/')})`)
+    .join(', ')
+  throw new Error(`模板端口冲突: ${message}`)
+}
+
 export function normalizeTemplateNodeTypes(values) {
   const nodeTypes = uniqStringArray(values).filter((item) => NODE_TYPES.has(item))
   return nodeTypes.length > 0 ? nodeTypes : ['vps', 'edge']
@@ -68,15 +93,11 @@ export async function resolveTemplateForApply(kv, templateId) {
 
 export async function resolveTemplatesForNode(kv, nodeType, templateIds) {
   const preview = await resolveTemplatesForPreview(kv, nodeType, templateIds)
-  if (preview.groups.length > 1) {
-    throw new Error('selected templates must use the same engine')
-  }
-
-  const firstGroup = preview.groups[0] || null
   return {
     ids: preview.ids,
-    templates: firstGroup ? firstGroup.templates : [],
-    engine: firstGroup ? firstGroup.engine : 'sing-box',
+    templates: preview.templates,
+    groups: preview.groups,
+    engine: preview.groups.length === 1 ? preview.groups[0].engine : 'multi',
   }
 }
 
@@ -94,6 +115,8 @@ export async function resolveTemplatesForPreview(kv, nodeType, templateIds) {
     }
     templates.push(template)
   }
+
+  ensureUniqueTemplatePorts(templates)
 
   const groupsMap = new Map()
   for (const template of templates) {
@@ -115,6 +138,9 @@ function buildTargetArtifact(artifactId, artifact, nowIso) {
     id: artifactId,
     rev: artifact.rev,
     engine: artifact.engine,
+    engines: Array.isArray(artifact.engines) ? artifact.engines : [],
+    action_sing_box: String(artifact.action_sing_box || ''),
+    action_xray: String(artifact.action_xray || ''),
     reload_cmd: artifact.reload_cmd,
     sha256: artifact.sha256,
     summary: artifact.summary,
@@ -127,6 +153,7 @@ function buildTargetArtifact(artifactId, artifact, nowIso) {
 
 export async function queueNodeTemplateApply({ kv, node, templateIds, nowIso }) {
   const resolved = await resolveTemplatesForNode(kv, node.node_type, templateIds)
+  const templateGroups = Array.isArray(resolved.groups) ? resolved.groups : []
   const currentVersion = Number(node.current_version || 0) || 0
   const targetVersion = Number(node.target_version || 0) || 0
   const nextVersion = Math.max(currentVersion, targetVersion, 0) + 1
@@ -138,6 +165,7 @@ export async function queueNodeTemplateApply({ kv, node, templateIds, nowIso }) 
     rev: nextVersion,
     operationId,
     templates: resolved.templates,
+    templateGroups,
     params: {},
     createdAt: nowIso,
     engine: resolved.engine,
@@ -148,6 +176,9 @@ export async function queueNodeTemplateApply({ kv, node, templateIds, nowIso }) 
     node_id: node.id,
     rev: artifact.rev,
     engine: artifact.engine,
+    engines: artifact.engines || [],
+    action_sing_box: String(artifact.action_sing_box || ''),
+    action_xray: String(artifact.action_xray || ''),
     reload_cmd: artifact.reload_cmd,
     sha256: artifact.sha256,
     bundle: artifact.bundle,
@@ -161,3 +192,4 @@ export async function queueNodeTemplateApply({ kv, node, templateIds, nowIso }) 
   node.last_release_error_code = ''
   node.last_release_message = resolved.templates.length > 0 ? `templates queued r${nextVersion}` : `templates cleared r${nextVersion}`
 }
+

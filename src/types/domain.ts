@@ -13,10 +13,18 @@ export interface NodeArtifactConfigView {
   id: string
   rev: number
   engine: string
+  engines: string[]
+  action_sing_box: string
+  action_xray: string
   sha256: string
   missing: boolean
   config_name: string
   config_text: string
+  configs: Array<{
+    engine: string
+    config_name: string
+    config_text: string
+  }>
   created_at: string
 }
 
@@ -75,6 +83,9 @@ export interface NodeRecord {
     id: string
     rev: number
     engine: string
+    engines: string[]
+    action_sing_box: string
+    action_xray: string
     reload_cmd: string
     sha256: string
     summary: string

@@ -31,31 +31,44 @@ export async function onRequestPost({ request, env, params }) {
   }
 
   const nextVersion = calcNextVersion(node)
-  const previews = resolved.groups.map((group) => {
+  const groupsMap = new Map((resolved.groups || []).map((group) => [group.engine, group.templates || []]))
+
+  const previews = ['sing-box', 'xray'].map((engine) => {
+    const templates = groupsMap.get(engine) || []
+    if (templates.length === 0) {
+      return {
+        rev: nextVersion,
+        engine,
+        template_ids: [],
+        template_names: [],
+        config_name: engine === 'xray' ? 'xray.json' : 'sing-box.json',
+        config_text: 'null\n',
+      }
+    }
+
     const preview = buildNodeConfigPreview({
-      templates: group.templates,
+      templates,
       params: {},
-      engine: group.engine,
+      engine,
     })
+
     return {
       rev: nextVersion,
-      engine: group.engine,
-      template_ids: resolved.ids.filter((id) => group.templates.some((template) => template.id === id)),
-      template_names: group.templates.map((template) => String(template.name || template.id)),
+      engine,
+      template_ids: resolved.ids.filter((id) => templates.some((template) => template.id === id)),
+      template_names: templates.map((template) => String(template.name || template.id)),
       config_name: preview.config_name,
       config_text: preview.config_text,
     }
   })
-
-  const publishable = previews.length <= 1
 
   return ok({
     node_id: node.id,
     node_name: String(node.name || ''),
     next_version: nextVersion,
     applied_template_ids: resolved.ids,
-    publishable,
-    publish_message: publishable ? '' : '当前选择包含多个内核，请按内核分开发布',
+    publishable: true,
+    publish_message: '',
     previews,
   })
 }
