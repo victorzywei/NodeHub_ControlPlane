@@ -14,6 +14,13 @@ function normalizeErrorCode(value) {
   return /^[A-Z0-9_:-]{1,64}$/.test(code) ? code : ''
 }
 
+function normalizeVersion(value) {
+  if (value === undefined || value === null || value === '') return null
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 0) return null
+  return Math.floor(num)
+}
+
 function normalizeEvent(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
 
@@ -23,10 +30,15 @@ function normalizeEvent(raw) {
   const status = String(raw.status || '')
   if (!APPLY_STATUSES.has(status)) return null
 
+  const targetVersion = normalizeVersion(raw.target_version ?? raw.version ?? raw.rev)
+  const currentVersion = normalizeVersion(raw.current_version)
+
   return {
     status,
     error_code: normalizeErrorCode(raw.error_code),
     message: normalizeMessage(raw.message || raw.log || raw.detail),
+    target_version: targetVersion,
+    current_version: currentVersion,
   }
 }
 
@@ -57,12 +69,31 @@ function setCurrentFromTarget(node, appliedAt) {
   return true
 }
 
-function applyEvent(node, event, nowIso) {
+function resolveEventVersion(node, event) {
+  const { targetVersion: nodeTargetVersion } = getTarget(node)
+  const targetVersion = event.target_version ?? nodeTargetVersion
+  // Older agents may not send current_version; treat as reporting the target release.
+  const currentVersion = event.current_version ?? targetVersion
+  return {
+    nodeTargetVersion,
+    targetVersion,
+    currentVersion,
+  }
+}
+
+function isSameVersionStatus(node, event, releaseVersion) {
+  const status = String(node.last_release_status || '')
+  const version = Number(node.last_release_version || 0) || 0
+  return version === releaseVersion && status === event.status
+}
+
+function applyEvent(node, event, nowIso, releaseVersion) {
   if (event.status === 'ok') {
     setCurrentFromTarget(node, nowIso)
     node.last_release_status = 'ok'
     node.last_release_error_code = ''
     node.last_release_message = event.message || `release applied r${Number(node.current_version || 0)}`
+    node.last_release_version = releaseVersion
     return true
   }
 
@@ -70,12 +101,14 @@ function applyEvent(node, event, nowIso) {
     node.last_release_status = 'failed'
     node.last_release_error_code = event.error_code || ''
     node.last_release_message = event.message || 'release apply failed'
+    node.last_release_version = releaseVersion
     return true
   }
 
   node.last_release_status = 'pending'
   node.last_release_error_code = ''
   node.last_release_message = event.message || 'release apply pending'
+  node.last_release_version = releaseVersion
   return true
 }
 
@@ -97,6 +130,7 @@ export async function onRequestPost({ request, env }) {
 
   node.target_version = Number(node.target_version || 0) || 0
   node.current_version = Number(node.current_version || 0) || 0
+  node.last_release_version = Number(node.last_release_version || 0) || 0
 
   let accepted = 0
   let rejected = 0
@@ -109,7 +143,22 @@ export async function onRequestPost({ request, env }) {
       continue
     }
 
-    if (!applyEvent(node, event, nowIso)) {
+    const versions = resolveEventVersion(node, event)
+    if (
+      versions.targetVersion <= 0 ||
+      versions.currentVersion !== versions.targetVersion ||
+      versions.targetVersion !== versions.nodeTargetVersion
+    ) {
+      rejected += 1
+      continue
+    }
+
+    if (isSameVersionStatus(node, event, versions.targetVersion)) {
+      rejected += 1
+      continue
+    }
+
+    if (!applyEvent(node, event, nowIso, versions.targetVersion)) {
       rejected += 1
       continue
     }
@@ -130,5 +179,6 @@ export async function onRequestPost({ request, env }) {
     last_release_status: node.last_release_status,
     last_release_message: node.last_release_message,
     last_release_error_code: String(node.last_release_error_code || ''),
+    last_release_version: Number(node.last_release_version || 0),
   })
 }

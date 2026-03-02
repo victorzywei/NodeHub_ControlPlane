@@ -517,12 +517,22 @@ json_string_field() {
 }
 
 enqueue_apply_event() {
-  local status="$1" message="$2" error_code="${3:-}"
-  local msg code_json
+  local status="$1" message="$2" error_code="${3:-}" target_version="${4:-}" current_version="${5:-}"
+  local msg code_json target_json current_json
   msg="$(json_escape "$message")"
   code_json="$(json_escape "$error_code")"
-  printf '{"type":"apply_result","status":"%s","error_code":"%s","message":"%s"}\n' \
-    "$status" "$code_json" "$msg" >> "$EVENTS_FILE"
+  if [[ "$target_version" =~ ^[0-9]+$ ]]; then
+    target_json="$target_version"
+  else
+    target_json="null"
+  fi
+  if [[ "$current_version" =~ ^[0-9]+$ ]]; then
+    current_json="$current_version"
+  else
+    current_json="null"
+  fi
+  printf '{"type":"apply_result","status":"%s","error_code":"%s","message":"%s","target_version":%s,"current_version":%s}\n' \
+    "$status" "$code_json" "$msg" "$target_json" "$current_json" >> "$EVENTS_FILE"
 }
 
 flush_pending_events() {
@@ -546,13 +556,13 @@ apply_target_release() {
   local target_version="$1" artifact_url="$2" artifact_sha256="$3" reload_cmd="$4"
   [[ -n "$artifact_url" && -n "$artifact_sha256" ]] || {
     set_last_error "reconcile payload missing artifact"
-    enqueue_apply_event "failed" "artifact metadata missing" "E_RECONCILE"
+    enqueue_apply_event "failed" "artifact metadata missing" "E_RECONCILE" "$target_version" "$target_version"
     return 1
   }
 
   if [[ ! -x "$APPLY_HOOK" ]]; then
     set_last_error "apply hook missing"
-    enqueue_apply_event "failed" "apply hook missing" "E_HOOK"
+    enqueue_apply_event "failed" "apply hook missing" "E_HOOK" "$target_version" "$target_version"
     return 1
   fi
 
@@ -563,18 +573,18 @@ apply_target_release() {
     [[ -n "$err_code" ]] || err_code="E_APPLY"
     [[ -n "$err_message" ]] || err_message="artifact apply failed"
     set_last_error "$err_code: $err_message"
-    enqueue_apply_event "failed" "$err_message" "$err_code"
+    enqueue_apply_event "failed" "$err_message" "$err_code" "$target_version" "$target_version"
     return 1
   fi
 
   if echo "$target_version" > "$VERSION_FILE"; then
     clear_last_error
-    enqueue_apply_event "ok" "artifact applied" ""
+    enqueue_apply_event "ok" "artifact applied" "" "$target_version" "$target_version"
     return 0
   fi
 
   set_last_error "E_STATE: failed to persist version"
-  enqueue_apply_event "failed" "failed to persist version" "E_STATE"
+  enqueue_apply_event "failed" "failed to persist version" "E_STATE" "$target_version" "$target_version"
   return 1
 }
 
@@ -601,7 +611,7 @@ reconcile_once() {
 
   [[ -n "$target_version" ]] || {
     set_last_error "invalid reconcile response"
-    enqueue_apply_event "failed" "invalid reconcile response" "E_RECONCILE"
+    enqueue_apply_event "failed" "invalid reconcile response" "E_RECONCILE" "$current_version" "$current_version"
     return 1
   }
 
