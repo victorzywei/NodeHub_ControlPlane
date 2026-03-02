@@ -1,10 +1,10 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
-import { createNode, deleteNode, getNode, listNodes, nodeInstallCommand, updateNode } from '@/api/services/nodes'
+import { createNode, deleteNode, getNode, listNodes, nodeInstallCommand, publishNodeTemplates, updateNode } from '@/api/services/nodes'
 import { listTemplates } from '@/api/services/templates'
 import type { NodeKind, NodeRecord, TemplateRecord } from '@/types/domain'
 import { formatRelative } from '@/utils/format'
@@ -13,6 +13,7 @@ import { useToastStore } from '@/stores/toast'
 const toastStore = useToastStore()
 
 const loading = ref(false)
+const publishing = ref(false)
 const nodes = ref<NodeRecord[]>([])
 const templates = ref<TemplateRecord[]>([])
 const keyword = ref('')
@@ -29,7 +30,6 @@ const detailUninstallCommand = ref('')
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingId = ref('')
-const originalAppliedTemplateIds = ref<string[]>([])
 const form = reactive({
   name: '',
   node_type: 'vps' as NodeKind,
@@ -40,8 +40,11 @@ const form = reactive({
   entry_ip: '',
   github_mirror: '',
   cf_api_token: '',
-  applied_template_ids: [] as string[],
 })
+
+const publishOpen = ref(false)
+const publishNode = ref<NodeRecord | null>(null)
+const publishTemplateIds = ref<string[]>([])
 
 const confirmBatchDelete = ref(false)
 
@@ -69,12 +72,14 @@ const filteredRows = computed(() => {
   })
 })
 
-const availableTemplates = computed(() => {
-  return templates.value.filter((item) => item.node_types.includes(form.node_type))
+const publishAvailableTemplates = computed(() => {
+  const node = publishNode.value
+  if (!node) return []
+  return templates.value.filter((item) => item.node_types.includes(node.node_type))
 })
 
-const selectedTemplateEngine = computed(() => {
-  for (const id of form.applied_template_ids) {
+const publishSelectedTemplateEngine = computed(() => {
+  for (const id of publishTemplateIds.value) {
     const template = templates.value.find((item) => item.id === id)
     if (template) return template.engine
   }
@@ -95,7 +100,6 @@ function toPayload(): Partial<NodeRecord> {
     entry_ip: form.entry_ip.trim(),
     github_mirror: form.github_mirror.trim(),
     cf_api_token: form.cf_api_token.trim(),
-    applied_template_ids: [...form.applied_template_ids],
   }
 }
 
@@ -109,22 +113,6 @@ function fillForm(node?: NodeRecord): void {
   form.entry_ip = node?.entry_ip || ''
   form.github_mirror = node?.github_mirror || ''
   form.cf_api_token = node?.cf_api_token || ''
-  form.applied_template_ids = Array.isArray(node?.applied_template_ids) ? [...node.applied_template_ids] : []
-  originalAppliedTemplateIds.value = [...form.applied_template_ids]
-}
-
-function sameTemplateSelection(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false
-  const aSet = new Set(a)
-  for (const item of b) {
-    if (!aSet.has(item)) return false
-  }
-  return true
-}
-
-function sanitizeAppliedTemplateSelection(): void {
-  const allowed = new Set(availableTemplates.value.map((item) => item.id))
-  form.applied_template_ids = form.applied_template_ids.filter((id) => allowed.has(id))
 }
 
 async function loadNodesData(): Promise<void> {
@@ -158,7 +146,6 @@ function startCreate(): void {
   editorMode.value = 'create'
   editingId.value = ''
   fillForm()
-  sanitizeAppliedTemplateSelection()
   editorOpen.value = true
 }
 
@@ -166,22 +153,46 @@ function startEdit(node: NodeRecord): void {
   editorMode.value = 'edit'
   editingId.value = node.id
   fillForm(node)
-  sanitizeAppliedTemplateSelection()
   editorOpen.value = true
 }
 
-function toggleTemplate(id: string): void {
-  if (form.applied_template_ids.includes(id)) {
-    form.applied_template_ids = form.applied_template_ids.filter((item) => item !== id)
+function startPublish(node: NodeRecord): void {
+  publishNode.value = node
+  publishTemplateIds.value = Array.isArray(node.applied_template_ids) ? [...node.applied_template_ids] : []
+  publishOpen.value = true
+}
+
+function togglePublishTemplate(id: string): void {
+  if (publishTemplateIds.value.includes(id)) {
+    publishTemplateIds.value = publishTemplateIds.value.filter((item) => item !== id)
     return
   }
   const template = templates.value.find((item) => item.id === id)
   if (!template) return
-  if (selectedTemplateEngine.value && selectedTemplateEngine.value !== template.engine) {
+  if (publishSelectedTemplateEngine.value && publishSelectedTemplateEngine.value !== template.engine) {
     toastStore.push('同一个节点只能选择同一引擎的模板', 'warning')
     return
   }
-  form.applied_template_ids = [...form.applied_template_ids, id]
+  publishTemplateIds.value = [...publishTemplateIds.value, id]
+}
+
+async function publishTemplatesForNode(): Promise<void> {
+  if (!publishNode.value) return
+  publishing.value = true
+  try {
+    const node = await publishNodeTemplates(publishNode.value.id, publishTemplateIds.value)
+    publishNode.value = node
+    if (detailNode.value && detailNode.value.id === node.id) {
+      detailNode.value = node
+    }
+    toastStore.push(`协议已发布，目标版本 v${node.target_version}`, 'success')
+    publishOpen.value = false
+    await loadNodesData()
+  } catch {
+    toastStore.push('协议发布失败', 'danger')
+  } finally {
+    publishing.value = false
+  }
 }
 
 async function saveNode(): Promise<void> {
@@ -192,10 +203,6 @@ async function saveNode(): Promise<void> {
 
   try {
     const payload = toPayload()
-    if (editorMode.value === 'edit' && sameTemplateSelection(form.applied_template_ids, originalAppliedTemplateIds.value)) {
-      delete payload.applied_template_ids
-    }
-
     if (editorMode.value === 'create') {
       await createNode(payload as Partial<NodeRecord> & Pick<NodeRecord, 'name' | 'node_type'>)
       toastStore.push('节点已创建', 'success')
@@ -265,14 +272,6 @@ function appliedTemplatesText(node: NodeRecord): string {
     .join(', ')
 }
 
-watch(
-  () => form.node_type,
-  () => {
-    if (!editorOpen.value) return
-    sanitizeAppliedTemplateSelection()
-  },
-)
-
 onMounted(loadNodesData)
 </script>
 
@@ -332,6 +331,7 @@ onMounted(loadNodesData)
         <td>
           <div style="display: flex; gap: 6px">
             <button class="btn btn-secondary" @click="openDetail(node.id)">详情</button>
+            <button class="btn btn-primary" @click="startPublish(node)">协议发布</button>
             <button class="btn btn-secondary" @click="startEdit(node)">编辑</button>
           </div>
         </td>
@@ -419,25 +419,41 @@ onMounted(loadNodesData)
       <input v-model="form.cf_api_token" class="input" placeholder="用于申请 CF 证书" />
     </label>
 
-    <section class="panel panel-pad" style="display: grid; gap: 10px; margin-bottom: 8px">
-      <div style="font-weight: 700">协议应用</div>
-      <div v-if="availableTemplates.length === 0" class="muted">暂无可用模板</div>
-      <label
-        v-for="template in availableTemplates"
-        :key="template.id"
-        style="display: flex; align-items: center; gap: 8px"
-      >
-        <input
-          type="checkbox"
-          :checked="form.applied_template_ids.includes(template.id)"
-          @change="toggleTemplate(template.id)"
-        />
-        <span>{{ template.name }}</span>
-        <span class="muted" style="font-size: 12px">({{ template.engine }} / {{ template.protocol }})</span>
-      </label>
-    </section>
+    <div class="muted" style="margin-bottom: 8px">协议模板请在节点列表的“协议发布”中单独操作。</div>
 
     <button class="btn btn-primary" @click="saveNode">保存</button>
+  </DetailDrawer>
+
+  <DetailDrawer v-model="publishOpen" title="协议发布">
+    <template v-if="publishNode">
+      <div><strong>{{ publishNode.name }}</strong></div>
+      <div class="muted">{{ publishNode.id }}</div>
+      <div class="muted" style="margin: 8px 0 10px">发布后会生成新版本配置，节点会通过 reconcile 自动拉取。</div>
+
+      <section class="panel panel-pad" style="display: grid; gap: 10px; margin-bottom: 10px">
+        <div style="font-weight: 700">选择协议模板</div>
+        <div v-if="publishAvailableTemplates.length === 0" class="muted">该节点类型暂无可用模板</div>
+        <label
+          v-for="template in publishAvailableTemplates"
+          :key="template.id"
+          style="display: flex; align-items: center; gap: 8px"
+        >
+          <input
+            type="checkbox"
+            :checked="publishTemplateIds.includes(template.id)"
+            @change="togglePublishTemplate(template.id)"
+          />
+          <span>{{ template.name }}</span>
+          <span class="muted" style="font-size: 12px">({{ template.engine }} / {{ template.protocol }})</span>
+        </label>
+      </section>
+
+      <div class="muted" style="margin-bottom: 10px">当前已发布：{{ appliedTemplatesText(publishNode) }}</div>
+      <button class="btn btn-primary" :disabled="publishing" @click="publishTemplatesForNode">
+        {{ publishing ? '发布中...' : '发布版本' }}
+      </button>
+    </template>
+    <div v-else class="muted">请选择节点</div>
   </DetailDrawer>
 
   <ConfirmDialog

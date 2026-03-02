@@ -1,6 +1,5 @@
 ﻿import { requireAdmin } from '../../_lib/auth.js'
 import { ONLINE_WINDOW_MS } from '../../_lib/constants.js'
-import { normalizeNodeTemplateIds, queueNodeTemplateApply } from '../../_lib/node-apply.js'
 import { KEY, createId, createToken, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
@@ -88,7 +87,6 @@ export async function onRequestPost({ request, env }) {
 
   const id = createId('node')
   const now = new Date().toISOString()
-  const appliedTemplateIds = normalizeNodeTemplateIds(body.applied_template_ids)
   const node = {
     id,
     name,
@@ -101,7 +99,7 @@ export async function onRequestPost({ request, env }) {
     github_mirror: String(body.github_mirror || ''),
     cf_api_token: String(body.cf_api_token || ''),
     token: createToken(),
-    applied_template_ids: appliedTemplateIds,
+    applied_template_ids: [],
     target_version: 0,
     current_version: 0,
     last_seen_at: null,
@@ -120,20 +118,6 @@ export async function onRequestPost({ request, env }) {
     last_release_message: '',
     created_at: now,
     updated_at: now,
-  }
-
-  if (appliedTemplateIds.length > 0) {
-    try {
-      await queueNodeTemplateApply({
-        kv,
-        node,
-        templateIds: appliedTemplateIds,
-        nowIso: now,
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'failed to apply templates'
-      return fail('VALIDATION', message, 400)
-    }
   }
 
   await kvPutJson(kv, KEY.node(id), node)

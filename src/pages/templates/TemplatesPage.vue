@@ -40,7 +40,7 @@ const form = reactive({
   protocol: '',
   transport: '',
   tls_mode: '',
-  node_types: ['vps', 'edge'] as NodeKind[],
+  node_type: 'vps' as NodeKind,
   description: '',
 })
 
@@ -162,7 +162,7 @@ function resetCreateForm(): void {
   form.protocol = registry.value.protocols[0]?.key || ''
   form.transport = registry.value.transports[0]?.key || ''
   form.tls_mode = registry.value.tls_modes[0]?.key || ''
-  form.node_types = registry.value.node_types.map((item) => item.key as NodeKind)
+  form.node_type = (registry.value.node_types[0]?.key as NodeKind) || 'vps'
   form.description = ''
   syncDefaultsForm({})
   customParamKey.value = ''
@@ -184,20 +184,12 @@ function openEdit(template: TemplateRecord): void {
   form.protocol = template.protocol
   form.transport = template.transport
   form.tls_mode = template.tls_mode
-  form.node_types = template.node_types.length > 0 ? [...template.node_types] : ['vps', 'edge']
+  form.node_type = (template.node_types[0] as NodeKind) || 'vps'
   form.description = template.description
   syncDefaultsForm(template.defaults || {})
   customParamKey.value = ''
   customParamValue.value = ''
   editorOpen.value = true
-}
-
-function toggleNodeType(nodeType: NodeKind): void {
-  if (form.node_types.includes(nodeType)) {
-    form.node_types = form.node_types.filter((item) => item !== nodeType)
-    return
-  }
-  form.node_types = [...form.node_types, nodeType]
 }
 
 function addCustomParam(): void {
@@ -235,12 +227,7 @@ async function saveTemplate(): Promise<void> {
       return
     }
 
-    if (form.node_types.length === 0) {
-      toastStore.push('请至少选择一个节点类型', 'warning')
-      return
-    }
-
-    if (form.engine === 'xray' && form.protocol === 'hysteria2') {
+    if (form.node_type !== 'edge' && form.engine === 'xray' && form.protocol === 'hysteria2') {
       toastStore.push('xray 暂不支持 hysteria2 协议', 'warning')
       return
     }
@@ -263,11 +250,11 @@ async function saveTemplate(): Promise<void> {
 
     const payload = {
       name: form.name.trim(),
-      engine: form.engine,
+      engine: form.node_type === 'edge' ? 'sing-box' : form.engine,
       protocol: form.protocol,
       transport: form.transport,
       tls_mode: form.tls_mode,
-      node_types: form.node_types,
+      node_types: [form.node_type],
       description: form.description.trim(),
       defaults,
     }
@@ -394,7 +381,7 @@ onMounted(loadData)
       <input v-model="form.name" class="input" />
     </label>
 
-    <label>
+    <label v-if="form.node_type !== 'edge'">
       配置引擎
       <select v-model="form.engine" class="select">
         <option v-for="item in registry.engines" :key="item.key" :value="item.key">{{ item.label }}</option>
@@ -422,21 +409,14 @@ onMounted(loadData)
       </select>
     </label>
 
-    <section class="panel panel-pad" style="display: grid; gap: 8px">
-      <strong>适用节点</strong>
-      <label
-        v-for="nodeType in registry.node_types"
-        :key="nodeType.key"
-        style="display: flex; align-items: center; gap: 8px"
-      >
-        <input
-          type="checkbox"
-          :checked="form.node_types.includes(nodeType.key as NodeKind)"
-          @change="toggleNodeType(nodeType.key as NodeKind)"
-        />
-        <span>{{ nodeType.label }}</span>
-      </label>
-    </section>
+    <label>
+      节点类型
+      <select v-model="form.node_type" class="select">
+        <option v-for="nodeType in registry.node_types" :key="nodeType.key" :value="nodeType.key">
+          {{ nodeType.label }}
+        </option>
+      </select>
+    </label>
 
     <label>
       描述

@@ -1,7 +1,8 @@
-﻿import { requireAdmin } from '../../_lib/auth.js'
-import { ONLINE_WINDOW_MS } from '../../_lib/constants.js'
-import { KEY, indexRemove, indexUpsert, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
-import { ok, fail } from '../../_lib/response.js'
+import { requireAdmin } from '../../../_lib/auth.js'
+import { ONLINE_WINDOW_MS } from '../../../_lib/constants.js'
+import { normalizeNodeTemplateIds, queueNodeTemplateApply } from '../../../_lib/node-apply.js'
+import { KEY, indexUpsert, kvGetJson, kvPutJson } from '../../../_lib/kv.js'
+import { ok, fail } from '../../../_lib/response.js'
 
 function normalizeNode(node) {
   const lastSeen = node.last_seen_at ? new Date(node.last_seen_at).getTime() : 0
@@ -56,17 +57,7 @@ function normalizeNode(node) {
   }
 }
 
-export async function onRequestGet({ request, env, params }) {
-  const auth = requireAdmin(request, env)
-  if (!auth.ok) return auth.response
-
-  const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id))
-  if (!node) return fail('NOT_FOUND', 'Node not found', 404)
-  return ok(normalizeNode(node))
-}
-
-export async function onRequestPatch({ request, env, params }) {
+export async function onRequestPost({ request, env, params }) {
   const auth = requireAdmin(request, env)
   if (!auth.ok) return auth.response
 
@@ -75,32 +66,29 @@ export async function onRequestPatch({ request, env, params }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))
-  const stringFields = ['name', 'region', 'entry_cdn', 'entry_direct', 'entry_ip', 'github_mirror', 'cf_api_token']
-
-  stringFields.forEach((field) => {
-    if (body[field] !== undefined) {
-      node[field] = String(body[field])
-    }
-  })
-
-  if (body.tags !== undefined) {
-    node.tags = Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : []
+  const rawTemplateIds = body.applied_template_ids !== undefined ? body.applied_template_ids : body.template_ids
+  if (rawTemplateIds === undefined) {
+    return fail('VALIDATION', 'applied_template_ids is required', 400)
   }
 
+  const templateIds = normalizeNodeTemplateIds(rawTemplateIds)
   const nowIso = new Date().toISOString()
+
+  try {
+    await queueNodeTemplateApply({
+      kv,
+      node,
+      templateIds,
+      nowIso,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'failed to publish templates'
+    return fail('VALIDATION', message, 400)
+  }
+
   node.updated_at = nowIso
   await kvPutJson(kv, KEY.node(node.id), node)
-  await indexUpsert(kv, KEY.idxNodes, { id: node.id, name: node.name, updated_at: node.updated_at })
+  await indexUpsert(kv, KEY.idxNodes, { id: node.id, name: node.name, updated_at: nowIso })
 
   return ok(normalizeNode(node))
-}
-
-export async function onRequestDelete({ request, env, params }) {
-  const auth = requireAdmin(request, env)
-  if (!auth.ok) return auth.response
-
-  const kv = env.NODEHUB_KV
-  await kvDelete(kv, KEY.node(params.id))
-  await indexRemove(kv, KEY.idxNodes, params.id)
-  return ok({ deleted: params.id })
 }

@@ -17,6 +17,10 @@ export function updateNode(id: string, payload: Partial<NodeRecord>): Promise<No
   return request(`/api/nodes/${id}`, { method: 'PATCH', body: payload })
 }
 
+export function publishNodeTemplates(id: string, appliedTemplateIds: string[]): Promise<NodeRecord> {
+  return request(`/api/nodes/${id}/publish`, { method: 'POST', body: { applied_template_ids: appliedTemplateIds } })
+}
+
 export function deleteNode(id: string): Promise<{ deleted: string }> {
   return request(`/api/nodes/${id}`, { method: 'DELETE' })
 }
