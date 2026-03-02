@@ -34,6 +34,12 @@ function json(content, status = 200) {
   })
 }
 
+function toNodeOutboundName(node, outbound, index, templateNames) {
+  const nodeName = String(node?.name || node?.id || 'node').trim()
+  const templateName = String(outbound?.template_name || templateNames[index] || outbound?.protocol || '').trim()
+  return templateName ? `${nodeName}-${templateName}` : nodeName
+}
+
 export async function onRequestGet({ request, env, params }) {
   const url = new URL(request.url)
   const format = String(url.searchParams.get('format') || 'v2ray').toLowerCase()
@@ -54,12 +60,17 @@ export async function onRequestGet({ request, env, params }) {
         : null
     if (!artifact || !Array.isArray(artifact.subscription_outbounds)) continue
 
-    for (const t of artifact.subscription_outbounds) {
+    const templateNames = Array.isArray(artifact.template_names)
+      ? artifact.template_names.map((item) => String(item || ''))
+      : []
+
+    for (let index = 0; index < artifact.subscription_outbounds.length; index += 1) {
+      const t = artifact.subscription_outbounds[index]
       const s = t.settings || {}
       const addr = String(node.entry_direct || node.entry_cdn || node.entry_ip || 'unknown').trim()
 
       outbounds.push({
-        name: artifact.subscription_outbounds.length > 1 ? `${node.name}-${t.protocol}` : node.name,
+        name: toNodeOutboundName(node, t, index, templateNames),
         node,
         protocol: t.protocol,
         transport: t.transport,

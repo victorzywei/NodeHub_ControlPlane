@@ -1,3 +1,16 @@
+function text(value) {
+    return String(value ?? '').trim()
+}
+
+function pickFirst(source, keys, fallback = '') {
+    const target = source && typeof source === 'object' ? source : {}
+    for (const key of keys) {
+        const value = text(target[key])
+        if (value) return value
+    }
+    return fallback
+}
+
 export function renderV2ray(outbounds) {
     const links = outbounds.map(ob => {
         const s = ob.settings || {}
@@ -36,7 +49,8 @@ export function renderV2ray(outbounds) {
                 if (s.spider_x) params.set('spx', s.spider_x)
                 if (s.flow) params.set('flow', s.flow)
             }
-            return `vless://${s.uuid}@${addr}:${port}?${params.toString()}#${encodeURIComponent(ob.name)}`
+            const uuid = pickFirst(s, ['uuid', 'user_id', 'id'])
+            return `vless://${uuid}@${addr}:${port}?${params.toString()}#${encodeURIComponent(ob.name)}`
         }
 
         if (protocol === 'trojan') {
@@ -53,14 +67,15 @@ export function renderV2ray(outbounds) {
                 params.set('sni', s.sni || s.server_name || s.host || '')
                 params.set('fp', s.fingerprint || 'chrome')
             }
-            return `trojan://${s.password}@${addr}:${port}?${params.toString()}#${encodeURIComponent(ob.name)}`
+            const password = pickFirst(s, ['password'])
+            return `trojan://${password}@${addr}:${port}?${params.toString()}#${encodeURIComponent(ob.name)}`
         }
 
         if (protocol === 'vmess') {
             const vmessConfig = {
                 v: '2', ps: ob.name,
                 add: addr, port: parseInt(port),
-                id: s.uuid, aid: s.alter_id || 0,
+                id: pickFirst(s, ['uuid', 'user_id', 'id']), aid: s.alter_id || 0,
                 scy: s.encryption || 'auto',
                 net: ob.transport || 'ws',
                 type: 'none',
@@ -78,7 +93,7 @@ export function renderV2ray(outbounds) {
         }
 
         if (protocol === 'shadowsocks' || ob.protocol === 'shadowsocks2022') {
-            const userinfo = btoa(`${s.method}:${s.password}`)
+            const userinfo = btoa(`${pickFirst(s, ['method', 'cipher'])}:${pickFirst(s, ['password'])}`)
             return `ss://${userinfo}@${addr}:${port}#${encodeURIComponent(ob.name)}`
         }
 
@@ -89,7 +104,8 @@ export function renderV2ray(outbounds) {
                 params.set('obfs', s.obfs_type || s.obfs)
                 params.set('obfs-password', s.obfs_password || '')
             }
-            return `hysteria2://${s.password}@${addr}:${port}?${params.toString()}#${encodeURIComponent(ob.name)}`
+            const password = pickFirst(s, ['password'])
+            return `hysteria2://${password}@${addr}:${port}?${params.toString()}#${encodeURIComponent(ob.name)}`
         }
 
         return ''
@@ -111,7 +127,7 @@ export function renderClash(subName, outbounds) {
 
         if (protocol === 'vless') {
             return {
-                ...base, type: 'vless', uuid: s.uuid,
+                ...base, type: 'vless', uuid: pickFirst(s, ['uuid', 'user_id', 'id']),
                 tls: hasTls, 'skip-cert-verify': s.allow_insecure || false,
                 servername: s.sni || s.server_name || s.host || '',
                 network: ob.transport || 'ws',
@@ -125,7 +141,7 @@ export function renderClash(subName, outbounds) {
 
         if (protocol === 'trojan') {
             return {
-                ...base, type: 'trojan', password: s.password,
+                ...base, type: 'trojan', password: pickFirst(s, ['password']),
                 sni: s.sni || '', 'skip-cert-verify': s.allow_insecure || false,
                 network: ob.transport || 'tcp',
                 'client-fingerprint': s.fingerprint || 'chrome',
@@ -136,7 +152,7 @@ export function renderClash(subName, outbounds) {
 
         if (protocol === 'vmess') {
             return {
-                ...base, type: 'vmess', uuid: s.uuid,
+                ...base, type: 'vmess', uuid: pickFirst(s, ['uuid', 'user_id', 'id']),
                 alterId: s.alter_id || 0, cipher: s.encryption || 'auto',
                 tls: hasTls, 'skip-cert-verify': s.allow_insecure || false,
                 servername: s.sni || s.server_name || s.host || '',
@@ -149,14 +165,14 @@ export function renderClash(subName, outbounds) {
         if (protocol === 'shadowsocks' || ob.protocol === 'shadowsocks2022') {
             return {
                 ...base, type: 'ss',
-                cipher: s.method, password: s.password,
+                cipher: pickFirst(s, ['method', 'cipher']), password: pickFirst(s, ['password']),
             }
         }
 
         if (protocol === 'hysteria2') {
             return {
                 ...base, type: 'hysteria2',
-                password: s.password, sni: s.sni || '',
+                password: pickFirst(s, ['password']), sni: s.sni || '',
                 up: `${s.up_mbps || 100} Mbps`,
                 down: `${s.down_mbps || 100} Mbps`,
                 obfs: s.obfs_type || s.obfs || undefined,
@@ -201,7 +217,7 @@ export function renderSingbox(outbounds) {
         const hasTls = ob.tls_mode !== 'none'
 
         if (protocol === 'vless') {
-            base.uuid = s.uuid
+            base.uuid = pickFirst(s, ['uuid', 'user_id', 'id'])
             base.flow = s.flow || undefined
             if (hasTls) {
                 base.tls = {
@@ -225,7 +241,7 @@ export function renderSingbox(outbounds) {
         }
 
         if (protocol === 'trojan') {
-            base.password = s.password
+            base.password = pickFirst(s, ['password'])
             if (hasTls) {
                 base.tls = {
                     enabled: true,
@@ -239,7 +255,7 @@ export function renderSingbox(outbounds) {
         }
 
         if (protocol === 'vmess') {
-            base.uuid = s.uuid
+            base.uuid = pickFirst(s, ['uuid', 'user_id', 'id'])
             base.alter_id = s.alter_id || 0
             base.security = s.encryption || 'auto'
             if (hasTls) {
@@ -253,12 +269,12 @@ export function renderSingbox(outbounds) {
         }
 
         if (protocol === 'shadowsocks' || ob.protocol === 'shadowsocks2022') {
-            base.method = s.method
-            base.password = s.password
+            base.method = pickFirst(s, ['method', 'cipher'])
+            base.password = pickFirst(s, ['password'])
         }
 
         if (protocol === 'hysteria2') {
-            base.password = s.password
+            base.password = pickFirst(s, ['password'])
             base.up_mbps = s.up_mbps || 100
             base.down_mbps = s.down_mbps || 100
             base.tls = {

@@ -2,6 +2,8 @@ export type NodeKind = 'vps' | 'edge'
 export type TemplateEngine = 'sing-box' | 'xray'
 
 export interface ArtifactSubscriptionOutbound {
+  template_id?: string
+  template_name?: string
   protocol: string
   transport: string
   tls_mode: string

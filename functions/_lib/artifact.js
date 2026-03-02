@@ -90,6 +90,86 @@ function toUser(template, settings) {
   throw new Error(`unsupported protocol: ${template.protocol}`)
 }
 
+function buildTemplateSettings(template, params) {
+  return {
+    ...(template?.defaults || {}),
+    ...(params || {}),
+  }
+}
+
+function normalizeTemplateSettings(template, sourceSettings) {
+  const settings = { ...(sourceSettings || {}) }
+  const protocol = text(template?.protocol).toLowerCase()
+  const transport = text(template?.transport).toLowerCase()
+  const tlsMode = text(template?.tls_mode).toLowerCase()
+
+  if (protocol === 'vless' || protocol === 'vmess') {
+    const user = toUser(template, settings)
+    settings.uuid = user.uuid
+    if (protocol === 'vless' && user.flow && !text(settings.flow)) {
+      settings.flow = user.flow
+    }
+    if (protocol === 'vmess') {
+      settings.alter_id = user.alter_id
+      if (!text(settings.encryption)) settings.encryption = 'auto'
+    }
+  } else if (protocol === 'trojan' || protocol === 'hysteria2') {
+    const user = toUser(template, settings)
+    settings.password = user.password
+  } else if (protocol === 'shadowsocks2022') {
+    const user = toUser(template, settings)
+    settings.method = user.method
+    settings.password = user.password
+  }
+
+  if (transport === 'ws' || transport === 'h2' || transport === 'httpupgrade') {
+    if (!text(settings.path)) settings.path = '/'
+    if (settings.host === undefined || settings.host === null) settings.host = ''
+  } else if (transport === 'grpc') {
+    if (!text(settings.service_name)) settings.service_name = 'grpc'
+  }
+
+  if (tlsMode === 'reality') {
+    const shortId = text(settings.reality_short_id || settings.short_id)
+    if (shortId) {
+      settings.short_id = shortId
+      settings.reality_short_id = shortId
+    }
+    const publicKey = text(settings.public_key || settings.reality_public_key)
+    if (publicKey) {
+      settings.public_key = publicKey
+      settings.reality_public_key = publicKey
+    }
+  }
+
+  if (protocol === 'hysteria2') {
+    settings.up_mbps = num(settings.up_mbps, 100)
+    settings.down_mbps = num(settings.down_mbps, 100)
+  }
+
+  return settings
+}
+
+function decorateTemplateWithResolvedSettings(template, params) {
+  return {
+    ...template,
+    __resolved_settings: normalizeTemplateSettings(template, buildTemplateSettings(template, params)),
+  }
+}
+
+function getEffectiveTemplateSettings(template, params) {
+  if (
+    template &&
+    typeof template === 'object' &&
+    template.__resolved_settings &&
+    typeof template.__resolved_settings === 'object' &&
+    !Array.isArray(template.__resolved_settings)
+  ) {
+    return { ...template.__resolved_settings }
+  }
+  return normalizeTemplateSettings(template, buildTemplateSettings(template, params))
+}
+
 function applyTlsForSingbox(template, settings) {
   const tlsMode = text(template.tls_mode).toLowerCase()
   if (!tlsMode || tlsMode === 'none') return undefined
@@ -156,7 +236,7 @@ function applyTransportForSingbox(template, settings) {
 }
 
 function buildSingboxInbound(template, params, idx) {
-  const settings = { ...(template.defaults || {}), ...(params || {}) }
+  const settings = getEffectiveTemplateSettings(template, params)
   const protocol = text(template.protocol).toLowerCase()
   const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
   if (!listenPort) throw new Error(`invalid port for template: ${template.name}`)
@@ -300,7 +380,7 @@ function buildXrayStreamSettings(template, settings) {
 }
 
 function buildXrayInbound(template, params, idx) {
-  const settings = { ...(template.defaults || {}), ...(params || {}) }
+  const settings = getEffectiveTemplateSettings(template, params)
   const protocol = text(template.protocol).toLowerCase()
   const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
   const streamSettings = buildXrayStreamSettings(template, settings)
@@ -398,14 +478,16 @@ function buildXrayConfig(templates, params) {
 
 function buildSubscriptionOutbounds(templates, params) {
   return templates.map((tpl) => {
-    const settings = { ...(tpl.defaults || {}), ...(params || {}) }
+    const settings = getEffectiveTemplateSettings(tpl, params)
     const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
     return {
+      template_id: text(tpl.id),
+      template_name: text(tpl.name),
       protocol: text(tpl.protocol),
       transport: text(tpl.transport),
       tls_mode: text(tpl.tls_mode),
       port: listenPort,
-      settings,
+      settings: { ...settings },
     }
   })
 }
@@ -516,7 +598,11 @@ function getGroupAction(groups, engine) {
 }
 
 export async function buildNodeArtifactBundle({ node, rev, operationId, templates, templateGroups, params, createdAt, engine }) {
-  const groups = buildTemplateGroups({ templates, templateGroups, engine })
+  const baseGroups = buildTemplateGroups({ templates, templateGroups, engine })
+  const groups = baseGroups.map((group) => ({
+    engine: group.engine,
+    templates: group.templates.map((template) => decorateTemplateWithResolvedSettings(template, params)),
+  }))
   const allTemplates = groups.flatMap((group) => group.templates)
   const templateNames = allTemplates.map((item) => item.name)
   const summary = summarizeConfig(templateNames, params)
