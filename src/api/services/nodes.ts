@@ -1,5 +1,5 @@
 ﻿import { request } from '@/api/request'
-import type { NodeConfigDetail, NodeRecord } from '@/types/domain'
+import type { NodeConfigDetail, NodePublishPreview, NodeRecord } from '@/types/domain'
 
 export function listNodes(): Promise<NodeRecord[]> {
   return request('/api/nodes')
@@ -19,6 +19,10 @@ export function updateNode(id: string, payload: Partial<NodeRecord>): Promise<No
 
 export function publishNodeTemplates(id: string, appliedTemplateIds: string[]): Promise<NodeRecord> {
   return request(`/api/nodes/${id}/publish`, { method: 'POST', body: { applied_template_ids: appliedTemplateIds } })
+}
+
+export function previewNodePublish(id: string, appliedTemplateIds: string[]): Promise<NodePublishPreview> {
+  return request(`/api/nodes/${id}/publish-preview`, { method: 'POST', body: { applied_template_ids: appliedTemplateIds } })
 }
 
 export function deleteNode(id: string): Promise<{ deleted: string }> {

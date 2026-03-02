@@ -67,6 +67,20 @@ export async function resolveTemplateForApply(kv, templateId) {
 }
 
 export async function resolveTemplatesForNode(kv, nodeType, templateIds) {
+  const preview = await resolveTemplatesForPreview(kv, nodeType, templateIds)
+  if (preview.groups.length > 1) {
+    throw new Error('selected templates must use the same engine')
+  }
+
+  const firstGroup = preview.groups[0] || null
+  return {
+    ids: preview.ids,
+    templates: firstGroup ? firstGroup.templates : [],
+    engine: firstGroup ? firstGroup.engine : 'sing-box',
+  }
+}
+
+export async function resolveTemplatesForPreview(kv, nodeType, templateIds) {
   const ids = normalizeNodeTemplateIds(templateIds)
   const templates = []
 
@@ -81,15 +95,18 @@ export async function resolveTemplatesForNode(kv, nodeType, templateIds) {
     templates.push(template)
   }
 
-  const engines = new Set(templates.map((item) => normalizeTemplateEngine(item.engine)))
-  if (engines.size > 1) {
-    throw new Error('selected templates must use the same engine')
+  const groupsMap = new Map()
+  for (const template of templates) {
+    const engine = normalizeTemplateEngine(template.engine)
+    if (!groupsMap.has(engine)) groupsMap.set(engine, [])
+    groupsMap.get(engine).push(template)
   }
+  const groups = Array.from(groupsMap.entries()).map(([engine, rows]) => ({ engine, templates: rows }))
 
   return {
     ids,
     templates,
-    engine: engines.size === 1 ? [...engines][0] : 'sing-box',
+    groups,
   }
 }
 

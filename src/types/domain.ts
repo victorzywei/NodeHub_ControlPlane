@@ -27,6 +27,25 @@ export interface NodeConfigDetail {
   current: NodeArtifactConfigView | null
 }
 
+export interface NodePublishPreviewItem {
+  rev: number
+  engine: string
+  template_ids: string[]
+  template_names: string[]
+  config_name: string
+  config_text: string
+}
+
+export interface NodePublishPreview {
+  node_id: string
+  node_name: string
+  next_version: number
+  applied_template_ids: string[]
+  publishable: boolean
+  publish_message: string
+  previews: NodePublishPreviewItem[]
+}
+
 export interface NodeRecord {
   id: string
   name: string

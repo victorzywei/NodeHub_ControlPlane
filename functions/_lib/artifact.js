@@ -458,6 +458,16 @@ function buildConfigFile(engine, templates, params) {
   }
 }
 
+export function buildNodeConfigPreview({ templates, params = {}, engine }) {
+  const selectedEngine = normalizeEngine(engine || templates?.[0]?.engine)
+  const configFile = buildConfigFile(selectedEngine, templates || [], params || {})
+  return {
+    engine: selectedEngine,
+    config_name: configFile.path,
+    config_text: configFile.content,
+  }
+}
+
 export async function buildNodeArtifactBundle({ node, rev, operationId, templates, params, createdAt, engine }) {
   const templateNames = templates.map((item) => item.name)
   const summary = summarizeConfig(templateNames, params)

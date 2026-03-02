@@ -4,9 +4,9 @@ import DataGrid from '@/components/ui/DataGrid.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
-import { createNode, deleteNode, getNode, listNodes, nodeInstallCommand, publishNodeTemplates, updateNode } from '@/api/services/nodes'
+import { createNode, deleteNode, getNode, listNodes, nodeInstallCommand, previewNodePublish, publishNodeTemplates, updateNode } from '@/api/services/nodes'
 import { listTemplates } from '@/api/services/templates'
-import type { NodeKind, NodeRecord, TemplateRecord } from '@/types/domain'
+import type { NodeKind, NodePublishPreview, NodeRecord, TemplateRecord } from '@/types/domain'
 import { formatRelative } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
@@ -45,6 +45,10 @@ const form = reactive({
 const publishOpen = ref(false)
 const publishNode = ref<NodeRecord | null>(null)
 const publishTemplateIds = ref<string[]>([])
+const publishPreviewLoading = ref(false)
+const publishPreview = ref<NodePublishPreview | null>(null)
+const publishPreviewError = ref('')
+let publishPreviewSeq = 0
 
 const confirmBatchDelete = ref(false)
 
@@ -76,14 +80,6 @@ const publishAvailableTemplates = computed(() => {
   const node = publishNode.value
   if (!node) return []
   return templates.value.filter((item) => item.node_types.includes(node.node_type))
-})
-
-const publishSelectedTemplateEngine = computed(() => {
-  for (const id of publishTemplateIds.value) {
-    const template = templates.value.find((item) => item.id === id)
-    if (template) return template.engine
-  }
-  return ''
 })
 
 function toPayload(): Partial<NodeRecord> {
@@ -159,25 +155,49 @@ function startEdit(node: NodeRecord): void {
 function startPublish(node: NodeRecord): void {
   publishNode.value = node
   publishTemplateIds.value = Array.isArray(node.applied_template_ids) ? [...node.applied_template_ids] : []
+  publishPreview.value = null
+  publishPreviewError.value = ''
   publishOpen.value = true
+  void refreshPublishPreview()
+}
+
+async function refreshPublishPreview(): Promise<void> {
+  if (!publishNode.value) return
+
+  const seq = ++publishPreviewSeq
+  publishPreviewLoading.value = true
+  publishPreviewError.value = ''
+
+  try {
+    const preview = await previewNodePublish(publishNode.value.id, publishTemplateIds.value)
+    if (seq !== publishPreviewSeq) return
+    publishPreview.value = preview
+  } catch {
+    if (seq !== publishPreviewSeq) return
+    publishPreview.value = null
+    publishPreviewError.value = '预览生成失败'
+  } finally {
+    if (seq === publishPreviewSeq) {
+      publishPreviewLoading.value = false
+    }
+  }
 }
 
 function togglePublishTemplate(id: string): void {
   if (publishTemplateIds.value.includes(id)) {
     publishTemplateIds.value = publishTemplateIds.value.filter((item) => item !== id)
-    return
+  } else {
+    publishTemplateIds.value = [...publishTemplateIds.value, id]
   }
-  const template = templates.value.find((item) => item.id === id)
-  if (!template) return
-  if (publishSelectedTemplateEngine.value && publishSelectedTemplateEngine.value !== template.engine) {
-    toastStore.push('同一个节点只能选择同一引擎的模板', 'warning')
-    return
-  }
-  publishTemplateIds.value = [...publishTemplateIds.value, id]
+  void refreshPublishPreview()
 }
 
 async function publishTemplatesForNode(): Promise<void> {
   if (!publishNode.value) return
+  if (publishPreview.value && !publishPreview.value.publishable) {
+    toastStore.push(publishPreview.value.publish_message || '当前选择无法直接发布', 'warning')
+    return
+  }
   publishing.value = true
   try {
     const node = await publishNodeTemplates(publishNode.value.id, publishTemplateIds.value)
@@ -449,9 +469,50 @@ onMounted(loadNodesData)
       </section>
 
       <div class="muted" style="margin-bottom: 10px">当前已发布：{{ appliedTemplatesText(publishNode) }}</div>
-      <button class="btn btn-primary" :disabled="publishing" @click="publishTemplatesForNode">
+      <button
+        class="btn btn-primary"
+        :disabled="publishing || publishPreviewLoading || (publishPreview ? !publishPreview.publishable : false)"
+        @click="publishTemplatesForNode"
+      >
         {{ publishing ? '发布中...' : '发布版本' }}
       </button>
+
+      <section class="panel panel-pad" style="display: grid; gap: 10px; margin-top: 12px">
+        <div style="font-weight: 700">发布版本预览</div>
+
+        <div v-if="publishPreviewLoading" class="muted">正在生成预览...</div>
+        <div v-else-if="publishPreviewError" class="muted">{{ publishPreviewError }}</div>
+        <template v-else-if="publishPreview">
+          <div class="muted">目标版本：v{{ publishPreview.next_version }}</div>
+          <div
+            v-if="!publishPreview.publishable"
+            style="padding: 8px 10px; border-radius: 8px; background: rgba(180, 35, 24, 0.08); color: #b42318"
+          >
+            {{ publishPreview.publish_message || '当前选择无法直接发布' }}
+          </div>
+
+          <div v-if="publishPreview.previews.length === 0" class="muted">未选择模板，发布后将清空协议配置。</div>
+          <section
+            v-for="preview in publishPreview.previews"
+            :key="`${preview.engine}-${preview.config_name}`"
+            class="panel panel-pad"
+            style="display: grid; gap: 8px"
+          >
+            <div style="display: flex; justify-content: space-between; gap: 8px; align-items: baseline">
+              <strong>{{ preview.engine }}</strong>
+              <span class="muted">v{{ preview.rev }} / {{ preview.config_name }}</span>
+            </div>
+            <div class="muted">模板：{{ preview.template_names.join(', ') || '-' }}</div>
+            <textarea
+              class="textarea"
+              readonly
+              :value="preview.config_text"
+              style="min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            />
+          </section>
+        </template>
+        <div v-else class="muted">请先选择协议模板</div>
+      </section>
     </template>
     <div v-else class="muted">请选择节点</div>
   </DetailDrawer>
