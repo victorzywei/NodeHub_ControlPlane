@@ -249,19 +249,9 @@ onMounted(loadData)
 </template>
 
 <style scoped>
-.sub-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .sub-stack {
   display: grid;
   gap: 14px;
-}
-
-.sub-card {
-  border-radius: 16px;
 }
 
 .sub-head {

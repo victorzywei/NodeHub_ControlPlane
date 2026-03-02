@@ -1,75 +1,15 @@
 import { requireAdmin } from '../../_lib/auth.js'
-import { BUILTIN_TEMPLATES, TEMPLATE_REGISTRY } from '../../_lib/constants.js'
-import { normalizeTemplateEngine, normalizeTemplateNodeTypes } from '../../_lib/node-apply.js'
+import { TEMPLATE_REGISTRY } from '../../_lib/constants.js'
+import { normalizeTemplateNodeTypes } from '../../_lib/node-apply.js'
 import { applyTemplateAutoDefaults } from '../../_lib/template.js'
-import { KEY, createId, hydrateByIndex, indexUpsert, kvGetJson, kvPutJson } from '../../_lib/kv.js'
+import {
+  engineSupportsProtocol,
+  listBuiltinTemplates,
+  normalizeCustomTemplate,
+  toDefaults,
+} from '../../_lib/template-records.js'
+import { KEY, createId, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
-
-function toDefaults(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  return value
-}
-
-function engineSupportsProtocol(engine, protocol) {
-  if (engine === 'xray' && protocol === 'hysteria2') return false
-  return true
-}
-
-async function buildBuiltinRow(kv, base) {
-  const now = new Date().toISOString()
-  const override = await kvGetJson(kv, KEY.templateOverride(base.id), null)
-  const engine = normalizeTemplateEngine(override?.engine || base.engine)
-  const nodeTypes = normalizeTemplateNodeTypes(override?.node_types || base.node_types)
-  const mergedDefaults = {
-    ...(base.defaults || {}),
-    ...(override?.defaults || {}),
-  }
-
-  const defaults = applyTemplateAutoDefaults({
-    protocol: base.protocol,
-    transport: base.transport,
-    tlsMode: base.tls_mode,
-    defaults: mergedDefaults,
-  })
-
-  let effectiveOverride = override
-  if (JSON.stringify(defaults) !== JSON.stringify(mergedDefaults)) {
-    effectiveOverride = {
-      ...(override || {}),
-      defaults: {
-        ...(override?.defaults || {}),
-        ...defaults,
-      },
-      updated_at: now,
-    }
-    await kvPutJson(kv, KEY.templateOverride(base.id), effectiveOverride)
-  }
-
-  return {
-    ...base,
-    name: effectiveOverride?.name || base.name,
-    description: effectiveOverride?.description || base.description,
-    engine,
-    node_types: nodeTypes,
-    defaults: {
-      ...(base.defaults || {}),
-      ...(effectiveOverride?.defaults || {}),
-    },
-    updated_at: effectiveOverride?.updated_at || base.updated_at || base.created_at || now,
-  }
-}
-
-async function listBuiltinTemplates(kv) {
-  return Promise.all(BUILTIN_TEMPLATES.map((base) => buildBuiltinRow(kv, base)))
-}
-
-function normalizeCustomTemplate(row) {
-  return {
-    ...row,
-    engine: normalizeTemplateEngine(row.engine),
-    node_types: normalizeTemplateNodeTypes(row.node_types),
-  }
-}
 
 export async function onRequestGet({ request, env }) {
   const auth = requireAdmin(request, env)

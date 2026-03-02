@@ -1,18 +1,15 @@
 import { requireAdmin } from '../../_lib/auth.js'
-import { BUILTIN_TEMPLATES, TEMPLATE_REGISTRY } from '../../_lib/constants.js'
+import { TEMPLATE_REGISTRY } from '../../_lib/constants.js'
 import { normalizeTemplateEngine, normalizeTemplateNodeTypes } from '../../_lib/node-apply.js'
 import { applyTemplateAutoDefaults } from '../../_lib/template.js'
+import {
+  engineSupportsProtocol,
+  findBuiltinTemplate,
+  getMergedBuiltinTemplate,
+  toDefaults,
+} from '../../_lib/template-records.js'
 import { KEY, indexRemove, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
-
-function findBuiltin(id) {
-  return BUILTIN_TEMPLATES.find((item) => item.id === id)
-}
-
-function toDefaults(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  return value
-}
 
 function resolvePatchEngine(value, fallback) {
   if (value === undefined) return normalizeTemplateEngine(fallback)
@@ -22,64 +19,12 @@ function resolvePatchEngine(value, fallback) {
   return engine
 }
 
-function engineSupportsProtocol(engine, protocol) {
-  if (engine === 'xray' && protocol === 'hysteria2') return false
-  return true
-}
-
-async function getMergedBuiltin(kv, id) {
-  const builtin = findBuiltin(id)
-  if (!builtin) return null
-
-  const now = new Date().toISOString()
-  const override = await kvGetJson(kv, KEY.templateOverride(id), null)
-  const engine = normalizeTemplateEngine(override?.engine || builtin.engine)
-  const nodeTypes = normalizeTemplateNodeTypes(override?.node_types || builtin.node_types)
-  const mergedDefaults = {
-    ...(builtin.defaults || {}),
-    ...(override?.defaults || {}),
-  }
-
-  const defaults = applyTemplateAutoDefaults({
-    protocol: builtin.protocol,
-    transport: builtin.transport,
-    tlsMode: builtin.tls_mode,
-    defaults: mergedDefaults,
-  })
-
-  let effectiveOverride = override
-  if (JSON.stringify(defaults) !== JSON.stringify(mergedDefaults)) {
-    effectiveOverride = {
-      ...(override || {}),
-      defaults: {
-        ...(override?.defaults || {}),
-        ...defaults,
-      },
-      updated_at: now,
-    }
-    await kvPutJson(kv, KEY.templateOverride(id), effectiveOverride)
-  }
-
-  return {
-    ...builtin,
-    name: effectiveOverride?.name || builtin.name,
-    description: effectiveOverride?.description || builtin.description,
-    engine,
-    node_types: nodeTypes,
-    defaults: {
-      ...(builtin.defaults || {}),
-      ...(effectiveOverride?.defaults || {}),
-    },
-    updated_at: effectiveOverride?.updated_at || builtin.updated_at || builtin.created_at || now,
-  }
-}
-
 export async function onRequestGet({ request, env, params }) {
   const auth = requireAdmin(request, env)
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const builtin = await getMergedBuiltin(kv, params.id)
+  const builtin = await getMergedBuiltinTemplate(kv, params.id)
   if (builtin) return ok(builtin)
 
   const template = await kvGetJson(kv, KEY.template(params.id), null)
@@ -99,7 +44,7 @@ export async function onRequestPatch({ request, env, params }) {
   const body = await request.json().catch(() => ({}))
   const now = new Date().toISOString()
 
-  const builtin = findBuiltin(params.id)
+  const builtin = findBuiltinTemplate(params.id)
   if (builtin) {
     const existing = await kvGetJson(kv, KEY.templateOverride(params.id), {})
     let nextEngine
@@ -111,7 +56,10 @@ export async function onRequestPatch({ request, env, params }) {
     if (!engineSupportsProtocol(nextEngine, builtin.protocol)) {
       return fail('VALIDATION', 'selected engine does not support the protocol', 400)
     }
-    const nextNodeTypes = body.node_types !== undefined ? normalizeTemplateNodeTypes(body.node_types) : normalizeTemplateNodeTypes(existing.node_types || builtin.node_types)
+    const nextNodeTypes =
+      body.node_types !== undefined
+        ? normalizeTemplateNodeTypes(body.node_types)
+        : normalizeTemplateNodeTypes(existing.node_types || builtin.node_types)
     const mergedDefaults = {
       ...(builtin.defaults || {}),
       ...(existing.defaults || {}),
@@ -133,7 +81,7 @@ export async function onRequestPatch({ request, env, params }) {
       updated_at: now,
     }
     await kvPutJson(kv, KEY.templateOverride(params.id), override)
-    return ok(await getMergedBuiltin(kv, params.id))
+    return ok(await getMergedBuiltinTemplate(kv, params.id))
   }
 
   const current = await kvGetJson(kv, KEY.template(params.id), null)
@@ -174,7 +122,7 @@ export async function onRequestDelete({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const builtin = findBuiltin(params.id)
+  const builtin = findBuiltinTemplate(params.id)
 
   if (builtin) {
     await kvDelete(kv, KEY.templateOverride(params.id))

@@ -1,12 +1,8 @@
-﻿import { request } from '@/api/request'
+import { request } from '@/api/request'
 import type { TemplateRecord, TemplateRegistry } from '@/types/domain'
 
 export function listTemplates(): Promise<TemplateRecord[]> {
   return request('/api/templates')
-}
-
-export function getTemplate(id: string): Promise<TemplateRecord> {
-  return request(`/api/templates/${id}`)
 }
 
 export function createTemplate(payload: Partial<TemplateRecord> & Pick<TemplateRecord, 'name' | 'engine' | 'protocol' | 'transport' | 'tls_mode'>): Promise<TemplateRecord> {

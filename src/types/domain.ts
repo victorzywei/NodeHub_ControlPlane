@@ -9,32 +9,6 @@ export interface ArtifactSubscriptionOutbound {
   settings: Record<string, unknown>
 }
 
-export interface NodeArtifactConfigView {
-  id: string
-  rev: number
-  engine: string
-  engines: string[]
-  action_sing_box: string
-  action_xray: string
-  sha256: string
-  missing: boolean
-  config_name: string
-  config_text: string
-  configs: Array<{
-    engine: string
-    config_name: string
-    config_text: string
-  }>
-  created_at: string
-}
-
-export interface NodeConfigDetail {
-  node_id: string
-  node_name: string
-  target: NodeArtifactConfigView | null
-  current: NodeArtifactConfigView | null
-}
-
 export interface NodePublishPreviewItem {
   rev: number
   engine: string
