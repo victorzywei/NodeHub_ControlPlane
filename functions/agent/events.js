@@ -2,6 +2,16 @@ import { KEY, kvGetJson, kvPutJson } from '../_lib/kv.js'
 import { ok, fail } from '../_lib/response.js'
 
 const APPLY_STATUSES = new Set(['pending', 'ok', 'failed'])
+const GENERIC_EVENT_MESSAGES = new Set([
+  'artifact applied',
+  'release apply failed',
+  'release apply pending',
+  'artifact apply failed',
+  'failed to persist version',
+  'invalid reconcile response',
+  'artifact metadata missing',
+  'apply hook missing',
+])
 
 function normalizeMessage(value) {
   const message = String(value || '').trim()
@@ -19,6 +29,33 @@ function normalizeVersion(value) {
   const num = Number(value)
   if (!Number.isFinite(num) || num < 0) return null
   return Math.floor(num)
+}
+
+function joinMessage(parts) {
+  return normalizeMessage(parts.filter(Boolean).join('; '))
+}
+
+function buildStatusMessage(node, event, releaseVersion) {
+  const release = `rev=r${releaseVersion}`
+  const current = `current=r${Number(node.current_version || 0)}`
+  const target = `target=r${Number(node.target_version || 0)}`
+  const code = event.error_code ? `code=${event.error_code}` : ''
+
+  if (event.status === 'ok') {
+    return joinMessage(['apply ok', release, current, target])
+  }
+  if (event.status === 'failed') {
+    return joinMessage(['apply failed', release, current, target, code || 'code=E_APPLY'])
+  }
+  return joinMessage(['apply pending', release, current, target])
+}
+
+function resolveEventMessage(node, event, releaseVersion) {
+  const message = normalizeMessage(event.message)
+  const fallback = buildStatusMessage(node, event, releaseVersion)
+  if (!message) return fallback
+  if (!GENERIC_EVENT_MESSAGES.has(message.toLowerCase())) return message
+  return joinMessage([fallback, `reason=${message}`])
 }
 
 function normalizeEvent(raw) {
@@ -92,7 +129,7 @@ function applyEvent(node, event, nowIso, releaseVersion) {
     setCurrentFromTarget(node, nowIso)
     node.last_release_status = 'ok'
     node.last_release_error_code = ''
-    node.last_release_message = event.message || `release applied r${Number(node.current_version || 0)}`
+    node.last_release_message = resolveEventMessage(node, event, releaseVersion)
     node.last_release_version = releaseVersion
     return true
   }
@@ -100,14 +137,14 @@ function applyEvent(node, event, nowIso, releaseVersion) {
   if (event.status === 'failed') {
     node.last_release_status = 'failed'
     node.last_release_error_code = event.error_code || ''
-    node.last_release_message = event.message || 'release apply failed'
+    node.last_release_message = resolveEventMessage(node, event, releaseVersion)
     node.last_release_version = releaseVersion
     return true
   }
 
   node.last_release_status = 'pending'
   node.last_release_error_code = ''
-  node.last_release_message = event.message || 'release apply pending'
+  node.last_release_message = resolveEventMessage(node, event, releaseVersion)
   node.last_release_version = releaseVersion
   return true
 }

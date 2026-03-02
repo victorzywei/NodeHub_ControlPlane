@@ -516,6 +516,29 @@ json_string_field() {
   echo "$payload" | tr -d '\r\n' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n1
 }
 
+extract_hook_field() {
+  local key="$1" output="$2"
+  printf '%s\n' "$output" | awk -F= -v target="$key" '$1==target { print substr($0, index($0, "=") + 1); exit }'
+}
+
+extract_hook_tail() {
+  local output="$1"
+  printf '%s\n' "$output" | awk '
+    !/^(ERROR_CODE|ERROR_MESSAGE|ERROR_DETAIL|APPLY_DETAIL)=/ && NF {
+      gsub(/\r/, "", $0)
+      rows[++count] = $0
+    }
+    END {
+      start = count - 2
+      if (start < 1) start = 1
+      for (i = start; i <= count; i++) {
+        if (i > start) printf(" || ")
+        printf("%s", rows[i])
+      }
+    }
+  '
+}
+
 enqueue_apply_event() {
   local status="$1" message="$2" error_code="${3:-}" target_version="${4:-}" current_version="${5:-}"
   local msg code_json target_json current_json
@@ -554,37 +577,47 @@ flush_pending_events() {
 
 apply_target_release() {
   local target_version="$1" artifact_url="$2" artifact_sha256="$3" reload_cmd="$4"
+  local short_sha
+  short_sha="${artifact_sha256:0:16}"
   [[ -n "$artifact_url" && -n "$artifact_sha256" ]] || {
     set_last_error "reconcile payload missing artifact"
-    enqueue_apply_event "failed" "artifact metadata missing" "E_RECONCILE" "$target_version" "$target_version"
+    enqueue_apply_event "failed" "apply failed: rev=r${target_version}; reason=artifact metadata missing; artifact_url_present=$([[ -n "$artifact_url" ]] && echo yes || echo no); sha256_present=$([[ -n "$artifact_sha256" ]] && echo yes || echo no)" "E_RECONCILE" "$target_version" "$target_version"
     return 1
   }
 
   if [[ ! -x "$APPLY_HOOK" ]]; then
     set_last_error "apply hook missing"
-    enqueue_apply_event "failed" "apply hook missing" "E_HOOK" "$target_version" "$target_version"
+    enqueue_apply_event "failed" "apply failed: rev=r${target_version}; reason=apply hook missing; hook=${APPLY_HOOK}" "E_HOOK" "$target_version" "$target_version"
     return 1
   fi
 
-  local output="" err_code="" err_message=""
+  local output="" err_code="" err_message="" err_detail="" hook_tail="" apply_detail="" failed_message="" success_message=""
   if ! output="$("$APPLY_HOOK" "$target_version" "$artifact_url" "$artifact_sha256" "$reload_cmd" 2>&1)"; then
-    err_code="$(printf '%s\n' "$output" | awk -F= '/^ERROR_CODE=/{ print $2; exit }')"
-    err_message="$(printf '%s\n' "$output" | awk -F= '/^ERROR_MESSAGE=/{ print substr($0, index($0, "=") + 1); exit }')"
+    err_code="$(extract_hook_field "ERROR_CODE" "$output")"
+    err_message="$(extract_hook_field "ERROR_MESSAGE" "$output")"
+    err_detail="$(extract_hook_field "ERROR_DETAIL" "$output")"
+    hook_tail="$(extract_hook_tail "$output")"
     [[ -n "$err_code" ]] || err_code="E_APPLY"
     [[ -n "$err_message" ]] || err_message="artifact apply failed"
     set_last_error "$err_code: $err_message"
-    enqueue_apply_event "failed" "$err_message" "$err_code" "$target_version" "$target_version"
+    failed_message="apply failed: rev=r${target_version}; code=${err_code}; reason=${err_message}; sha256=${short_sha}"
+    [[ -n "$err_detail" ]] && failed_message="${failed_message}; detail=${err_detail}"
+    [[ -n "$hook_tail" ]] && failed_message="${failed_message}; output=${hook_tail}"
+    enqueue_apply_event "failed" "$failed_message" "$err_code" "$target_version" "$target_version"
     return 1
   fi
 
+  apply_detail="$(extract_hook_field "APPLY_DETAIL" "$output")"
   if echo "$target_version" > "$VERSION_FILE"; then
     clear_last_error
-    enqueue_apply_event "ok" "artifact applied" "" "$target_version" "$target_version"
+    success_message="apply ok: rev=r${target_version}; sha256=${short_sha}; reload=$([[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]] && echo custom || echo default)"
+    [[ -n "$apply_detail" ]] && success_message="${success_message}; detail=${apply_detail}"
+    enqueue_apply_event "ok" "$success_message" "" "$target_version" "$target_version"
     return 0
   fi
 
   set_last_error "E_STATE: failed to persist version"
-  enqueue_apply_event "failed" "failed to persist version" "E_STATE" "$target_version" "$target_version"
+  enqueue_apply_event "failed" "apply failed: rev=r${target_version}; code=E_STATE; reason=failed to persist version; sha256=${short_sha}" "E_STATE" "$target_version" "$target_version"
   return 1
 }
 
@@ -611,7 +644,7 @@ reconcile_once() {
 
   [[ -n "$target_version" ]] || {
     set_last_error "invalid reconcile response"
-    enqueue_apply_event "failed" "invalid reconcile response" "E_RECONCILE" "$current_version" "$current_version"
+    enqueue_apply_event "failed" "apply failed: rev=r${current_version}; code=E_RECONCILE; reason=invalid reconcile response; payload=${response}" "E_RECONCILE" "$current_version" "$current_version"
     return 1
   }
 
@@ -697,11 +730,19 @@ CERT_CRT="${CONFIG_ROOT}/cert/server.crt"
 CERT_KEY="${CONFIG_ROOT}/cert/server.key"
 
 mkdir -p "$RELEASES_DIR" "$STAGING_ROOT"
+APPLY_STAGE="init"
+APPLY_ACTION_SING_BOX=""
+APPLY_ACTION_XRAY=""
 
 fail_with() {
   local code="$1" msg="$2"
+  local detail="stage=${APPLY_STAGE}; rev=r${TARGET_REV}"
+  [[ -n "$APPLY_ACTION_SING_BOX" ]] && detail="${detail}; action_sing_box=${APPLY_ACTION_SING_BOX}"
+  [[ -n "$APPLY_ACTION_XRAY" ]] && detail="${detail}; action_xray=${APPLY_ACTION_XRAY}"
+  [[ -n "$RELOAD_CMD" ]] && detail="${detail}; reload_cmd=${RELOAD_CMD}"
   echo "ERROR_CODE=$code"
   echo "ERROR_MESSAGE=$msg"
+  echo "ERROR_DETAIL=$detail"
   exit 1
 }
 
@@ -927,58 +968,84 @@ apply_release() {
   local rev="$1" artifact_url="$2" expected_sha="$3" reload_cmd="$4"
   local tmp_dir bundle_file actual_sha release_dir stage_dir action_result
   local action_sing_box action_xray
+  local reload_mode="default"
+  local start_sing_box="no" start_xray="no" stop_sing_box="no" stop_xray="no"
   tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t nodehub-apply)"
   bundle_file="$tmp_dir/bundle.txt"
   stage_dir="$STAGING_ROOT/r${rev}"
   release_dir="$RELEASES_DIR/r${rev}"
 
+  APPLY_STAGE="download"
   curl -fsS --max-time 60 "$artifact_url" -H "X-Node-Token: $NODE_TOKEN" -o "$bundle_file" || fail_with "E_DOWNLOAD" "artifact download failed"
+  APPLY_STAGE="verify_sha256"
   actual_sha="$(calc_sha256_file "$bundle_file")"
   [[ -n "$actual_sha" && "$actual_sha" == "$expected_sha" ]] || fail_with "E_HASH" "artifact sha256 mismatch"
 
+  APPLY_STAGE="extract_bundle"
   extract_bundle "$bundle_file" "$stage_dir"
+  APPLY_STAGE="parse_manifest"
   action_result="$(resolve_engine_actions "$stage_dir")"
   action_sing_box="${action_result%%|*}"
   action_xray="${action_result#*|}"
+  APPLY_ACTION_SING_BOX="$action_sing_box"
+  APPLY_ACTION_XRAY="$action_xray"
 
   if [[ "$action_sing_box" == "apply" ]]; then
+    APPLY_STAGE="validate_sing_box"
     validate_release_engine "sing-box" "$stage_dir"
   fi
   if [[ "$action_xray" == "apply" ]]; then
+    APPLY_STAGE="validate_xray"
     validate_release_engine "xray" "$stage_dir"
   fi
 
+  APPLY_STAGE="activate_release"
   rm -rf "$release_dir"
   mv "$stage_dir" "$release_dir"
   ln -sfn "$release_dir" "$CURRENT_LINK"
 
   if [[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]]; then
+    reload_mode="custom"
+    APPLY_STAGE="custom_reload"
     sh -lc "$reload_cmd" >/dev/null 2>&1 || fail_with "E_RELOAD" "custom reload command failed"
   else
+    APPLY_STAGE="restart_protocol"
     stop_legacy_protocol
     if [[ "$action_sing_box" == "stop" ]]; then
+      stop_sing_box="yes"
       stop_protocol_engine "sing-box"
     fi
     if [[ "$action_xray" == "stop" ]]; then
+      stop_xray="yes"
       stop_protocol_engine "xray"
     fi
     if [[ "$action_sing_box" == "apply" ]]; then
       if ! is_engine_running_rev "sing-box" "$rev"; then
+        stop_sing_box="yes"
         stop_protocol_engine "sing-box"
+        APPLY_STAGE="start_sing_box"
         start_protocol_engine "sing-box" "$release_dir" || fail_with "E_HEALTH" "failed to start sing-box process"
+        start_sing_box="yes"
+        APPLY_STAGE="mark_sing_box_revision"
         mark_engine_rev "sing-box" "$rev" || fail_with "E_STATE" "failed to persist sing-box revision marker"
       fi
     fi
     if [[ "$action_xray" == "apply" ]]; then
       if ! is_engine_running_rev "xray" "$rev"; then
+        stop_xray="yes"
         stop_protocol_engine "xray"
+        APPLY_STAGE="start_xray"
         start_protocol_engine "xray" "$release_dir" || fail_with "E_HEALTH" "failed to start xray process"
+        start_xray="yes"
+        APPLY_STAGE="mark_xray_revision"
         mark_engine_rev "xray" "$rev" || fail_with "E_STATE" "failed to persist xray revision marker"
       fi
     fi
   fi
 
+  APPLY_STAGE="cleanup"
   rm -rf "$tmp_dir"
+  echo "APPLY_DETAIL=stage=done; rev=r${rev}; sha256=${actual_sha}; action_sing_box=${action_sing_box}; action_xray=${action_xray}; reload_mode=${reload_mode}; stop_sing_box=${stop_sing_box}; start_sing_box=${start_sing_box}; stop_xray=${stop_xray}; start_xray=${start_xray}"
 }
 
 [[ -n "$TARGET_REV" && -n "$ARTIFACT_URL" && -n "$EXPECTED_SHA256" ]] || fail_with "E_ARGS" "missing apply arguments"
