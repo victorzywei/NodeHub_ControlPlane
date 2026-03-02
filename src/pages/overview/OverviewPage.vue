@@ -19,7 +19,26 @@ const onlineRate = computed(() => {
 })
 
 const failedAlerts = computed(() => nodes.value.filter((item) => item.last_release_status === 'failed').length)
-const pendingApply = computed(() => nodes.value.filter((item) => item.target_version > item.current_version).length)
+const pendingApply = computed(() => nodes.value.filter((item) => item.last_release_status === 'pending').length)
+
+function releaseVersionText(node: NodeRecord): string {
+  const rev = Number(node.target_artifact?.rev || node.target_version || 0)
+  if (!Number.isFinite(rev) || rev <= 0) return '-'
+  return `r${Math.floor(rev)}`
+}
+
+function releaseStatusClass(node: NodeRecord): 'success' | 'warning' | 'danger' {
+  if (node.last_release_status === 'ok') return 'success'
+  if (node.last_release_status === 'failed') return 'danger'
+  return 'warning'
+}
+
+function releaseStatusText(node: NodeRecord): string {
+  if (node.last_release_status === 'ok') return '已应用'
+  if (node.last_release_status === 'failed') return '应用失败'
+  if (node.last_release_status === 'pending') return '应用中'
+  return '未发布'
+}
 
 async function load(): Promise<void> {
   loading.value = true
@@ -48,7 +67,7 @@ onMounted(load)
       <div class="stat-value">{{ percent(onlineRate) }}</div>
     </article>
     <article class="stat-card">
-      <div class="muted">待下发节点</div>
+      <div class="muted">应用中节点</div>
       <div class="stat-value">{{ pendingApply }}</div>
     </article>
     <article class="stat-card">
@@ -63,8 +82,9 @@ onMounted(load)
         <tr>
           <th>节点</th>
           <th>类型</th>
-          <th>状态</th>
-          <th>目标版本</th>
+          <th>在线</th>
+          <th>发布版本</th>
+          <th>应用状态</th>
           <th>最后在线</th>
         </tr>
       </thead>
@@ -77,11 +97,14 @@ onMounted(load)
               {{ node.online ? '在线' : '离线' }}
             </span>
           </td>
-          <td>v{{ node.current_version }} -> v{{ node.target_version }}</td>
+          <td>{{ releaseVersionText(node) }}</td>
+          <td>
+            <span class="badge" :class="releaseStatusClass(node)">{{ releaseStatusText(node) }}</span>
+          </td>
           <td>{{ formatDateTime(node.last_seen_at) }}</td>
         </tr>
         <tr v-if="!loading && nodes.length === 0">
-          <td colspan="5" class="muted">暂无节点</td>
+          <td colspan="6" class="muted">暂无节点</td>
         </tr>
       </tbody>
     </DataGrid>
@@ -90,7 +113,7 @@ onMounted(load)
       <h3 style="margin: 0">容量概览</h3>
       <div class="muted">配置模板总数：{{ templateCount }}</div>
       <div class="muted">节点总数：{{ nodes.length }}</div>
-      <div class="muted">待下发数量：{{ pendingApply }}</div>
+      <div class="muted">应用中数量：{{ pendingApply }}</div>
       <div class="muted">最后刷新：{{ new Date().toLocaleTimeString('zh-CN', { hour12: false }) }}</div>
     </section>
   </section>

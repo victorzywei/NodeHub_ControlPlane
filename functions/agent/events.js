@@ -5,7 +5,7 @@ const APPLY_STATUSES = new Set(['pending', 'ok', 'failed'])
 
 function normalizeMessage(value) {
   const message = String(value || '').trim()
-  return message.slice(0, 512)
+  return message.slice(0, 4096)
 }
 
 function normalizeErrorCode(value) {
@@ -14,33 +14,19 @@ function normalizeErrorCode(value) {
   return /^[A-Z0-9_:-]{1,64}$/.test(code) ? code : ''
 }
 
-function normalizeSha256(value) {
-  const hash = String(value || '').trim().toLowerCase()
-  if (!hash) return ''
-  return /^[a-f0-9]{64}$/.test(hash) ? hash : ''
-}
-
 function normalizeEvent(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
 
-  const type = String(raw.type || '')
+  const type = String(raw.type || 'apply_result')
   if (type !== 'apply_result') return null
 
   const status = String(raw.status || '')
   if (!APPLY_STATUSES.has(status)) return null
 
-  const currentVersionRaw = Number(raw.current_version)
-  const currentVersion = Number.isFinite(currentVersionRaw) ? Math.max(0, Math.floor(currentVersionRaw)) : null
-
   return {
-    event_id: String(raw.event_id || ''),
-    type,
     status,
-    current_version: currentVersion,
-    artifact_sha256: normalizeSha256(raw.artifact_sha256 || raw.sha256),
     error_code: normalizeErrorCode(raw.error_code),
-    message: normalizeMessage(raw.message),
-    occurred_at: String(raw.occurred_at || ''),
+    message: normalizeMessage(raw.message || raw.log || raw.detail),
   }
 }
 
@@ -55,28 +41,12 @@ function getTarget(node) {
   return { targetArtifact, targetVersion }
 }
 
-function eventMatchesTarget(node, event) {
-  const { targetArtifact, targetVersion } = getTarget(node)
-  if (!targetArtifact || targetVersion <= 0) return false
-
-  if (event.current_version !== null && event.current_version !== targetVersion) return false
-
-  if (event.artifact_sha256) {
-    const expected = String(targetArtifact.sha256 || '').trim().toLowerCase()
-    if (!expected || event.artifact_sha256 !== expected) return false
-  }
-
-  return true
-}
-
 function setCurrentFromTarget(node, appliedAt) {
   const { targetArtifact, targetVersion } = getTarget(node)
   if (!targetArtifact || targetVersion <= 0) return false
 
-  node.target_version = targetVersion
-  node.target_artifact = targetArtifact
   node.current_version = targetVersion
-  const currentArtifact = {
+  node.current_artifact = {
     id: String(targetArtifact.id || ''),
     rev: targetVersion,
     engine: String(targetArtifact.engine || ''),
@@ -84,20 +54,15 @@ function setCurrentFromTarget(node, appliedAt) {
     summary: String(targetArtifact.summary || ''),
     applied_at: appliedAt,
   }
-  node.current_artifact = currentArtifact
   return true
 }
 
 function applyEvent(node, event, nowIso) {
-  if (!eventMatchesTarget(node, event)) return false
-
   if (event.status === 'ok') {
-    if (event.current_version === null) return false
-    if (!setCurrentFromTarget(node, nowIso)) return false
-
+    setCurrentFromTarget(node, nowIso)
     node.last_release_status = 'ok'
-    node.last_release_message = event.message || `release applied r${Number(node.current_version || 0)}`
     node.last_release_error_code = ''
+    node.last_release_message = event.message || `release applied r${Number(node.current_version || 0)}`
     return true
   }
 

@@ -51,6 +51,8 @@ const publishPreviewError = ref('')
 let publishPreviewSeq = 0
 
 const confirmBatchDelete = ref(false)
+const releaseStatusOpen = ref(false)
+const releaseStatusNode = ref<NodeRecord | null>(null)
 
 const templateNameMap = computed(() => {
   const map = new Map<string, string>()
@@ -205,7 +207,10 @@ async function publishTemplatesForNode(): Promise<void> {
     if (detailNode.value && detailNode.value.id === node.id) {
       detailNode.value = node
     }
-    toastStore.push(`协议已发布，目标版本 v${node.target_version}`, 'success')
+    if (releaseStatusNode.value && releaseStatusNode.value.id === node.id) {
+      releaseStatusNode.value = node
+    }
+    toastStore.push(`协议已发布，版本 r${node.target_version}`, 'success')
     publishOpen.value = false
     await loadNodesData()
   } catch {
@@ -292,6 +297,36 @@ function appliedTemplatesText(node: NodeRecord): string {
     .join(', ')
 }
 
+function releaseVersion(node: NodeRecord): number {
+  const targetRev = Number(node.target_artifact?.rev || 0)
+  if (Number.isFinite(targetRev) && targetRev > 0) return Math.floor(targetRev)
+  const version = Number(node.target_version || 0)
+  return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0
+}
+
+function releaseVersionText(node: NodeRecord): string {
+  const rev = releaseVersion(node)
+  return rev > 0 ? `r${rev}` : '-'
+}
+
+function releaseStatusClass(node: NodeRecord): 'success' | 'warning' | 'danger' {
+  if (node.last_release_status === 'ok') return 'success'
+  if (node.last_release_status === 'failed') return 'danger'
+  return 'warning'
+}
+
+function releaseStatusText(node: NodeRecord): string {
+  if (node.last_release_status === 'ok') return '已应用'
+  if (node.last_release_status === 'failed') return '应用失败'
+  if (node.last_release_status === 'pending') return '应用中'
+  return '未发布'
+}
+
+function openReleaseStatus(node: NodeRecord): void {
+  releaseStatusNode.value = node
+  releaseStatusOpen.value = true
+}
+
 onMounted(loadNodesData)
 </script>
 
@@ -323,8 +358,9 @@ onMounted(loadNodesData)
         <th>类型</th>
         <th>区域</th>
         <th>协议应用</th>
-        <th>状态</th>
-        <th>版本</th>
+        <th>在线</th>
+        <th>发布版本</th>
+        <th>应用状态</th>
         <th>最后在线</th>
         <th>操作</th>
       </tr>
@@ -346,7 +382,17 @@ onMounted(loadNodesData)
             {{ node.online ? '在线' : '离线' }}
           </span>
         </td>
-        <td>v{{ node.current_version }} -> v{{ node.target_version }}</td>
+        <td>{{ releaseVersionText(node) }}</td>
+        <td>
+          <button
+            class="badge"
+            :class="releaseStatusClass(node)"
+            style="border: none; cursor: pointer; padding: 4px 10px"
+            @click="openReleaseStatus(node)"
+          >
+            {{ releaseStatusText(node) }}
+          </button>
+        </td>
         <td>{{ formatRelative(node.last_seen_at) }}</td>
         <td>
           <div style="display: flex; gap: 6px">
@@ -357,7 +403,7 @@ onMounted(loadNodesData)
         </td>
       </tr>
       <tr v-if="!loading && filteredRows.length === 0">
-        <td colspan="9" class="muted">没有匹配节点</td>
+        <td colspan="10" class="muted">没有匹配节点</td>
       </tr>
     </tbody>
   </DataGrid>
@@ -371,6 +417,13 @@ onMounted(loadNodesData)
       <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
       <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
       <div>协议应用：{{ appliedTemplatesText(detailNode) }}</div>
+      <div>发布版本：{{ releaseVersionText(detailNode) }}</div>
+      <div>
+        应用状态：
+        <span class="badge" :class="releaseStatusClass(detailNode)">{{ releaseStatusText(detailNode) }}</span>
+      </div>
+      <div>应用回执：{{ detailNode.last_release_message || '-' }}</div>
+      <div>失败代码：{{ detailNode.last_release_error_code || '-' }}</div>
       <div>节点 Token：{{ detailNode.token || '-' }}</div>
       <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
       <div>协议应用版本：{{ detailNode.protocol_app_version || '-' }}</div>
@@ -483,7 +536,7 @@ onMounted(loadNodesData)
         <div v-if="publishPreviewLoading" class="muted">正在生成预览...</div>
         <div v-else-if="publishPreviewError" class="muted">{{ publishPreviewError }}</div>
         <template v-else-if="publishPreview">
-          <div class="muted">目标版本：v{{ publishPreview.next_version }}</div>
+          <div class="muted">目标版本：r{{ publishPreview.next_version }}</div>
           <div
             v-if="!publishPreview.publishable"
             style="padding: 8px 10px; border-radius: 8px; background: rgba(180, 35, 24, 0.08); color: #b42318"
@@ -500,7 +553,7 @@ onMounted(loadNodesData)
           >
             <div style="display: flex; justify-content: space-between; gap: 8px; align-items: baseline">
               <strong>{{ preview.engine }}</strong>
-              <span class="muted">v{{ preview.rev }} / {{ preview.config_name }}</span>
+              <span class="muted">r{{ preview.rev }} / {{ preview.config_name }}</span>
             </div>
             <div class="muted">模板：{{ preview.template_names.join(', ') || '-' }}</div>
             <textarea
@@ -515,6 +568,22 @@ onMounted(loadNodesData)
       </section>
     </template>
     <div v-else class="muted">请选择节点</div>
+  </DetailDrawer>
+
+  <DetailDrawer v-model="releaseStatusOpen" title="协议应用回执">
+    <template v-if="releaseStatusNode">
+      <div><strong>{{ releaseStatusNode.name }}</strong></div>
+      <div class="muted">{{ releaseStatusNode.id }}</div>
+      <div>发布版本：{{ releaseVersionText(releaseStatusNode) }}</div>
+      <div>
+        状态：
+        <span class="badge" :class="releaseStatusClass(releaseStatusNode)">{{ releaseStatusText(releaseStatusNode) }}</span>
+      </div>
+      <div>错误码：{{ releaseStatusNode.last_release_error_code || '-' }}</div>
+      <div class="muted" style="font-weight: 600">日志 / 原因</div>
+      <textarea class="textarea" readonly :value="releaseStatusNode.last_release_message || '-'" style="min-height: 200px" />
+    </template>
+    <div v-else class="muted">暂无回执</div>
   </DetailDrawer>
 
   <ConfirmDialog
