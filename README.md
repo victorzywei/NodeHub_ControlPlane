@@ -1,6 +1,6 @@
 ﻿# NodeHub Modern (Greenfield)
 
-全新项目（未复用 `old/` 代码），采用前后端解耦架构：
+全新项目，采用前后端解耦架构：
 
 - Frontend: Vue 3 + TypeScript + Vue Router + Pinia
 - API: Cloudflare Pages Functions (`functions/`)
