@@ -340,8 +340,19 @@ function buildSingboxConfig(templates, params) {
 
 function buildXrayStreamSettings(template, settings) {
   const protocol = text(template.protocol).toLowerCase()
-  const transport = protocol === 'hysteria2' ? 'hysteria' : (text(template.transport).toLowerCase() || 'tcp')
   const tlsMode = text(template.tls_mode).toLowerCase()
+  let transport = protocol === 'hysteria2' ? 'hysteria' : (text(template.transport).toLowerCase() || 'tcp')
+
+  // Xray REALITY in recent versions requires raw/xhttp/grpc, while templates
+  // still model plain TCP as "tcp". Map it to "raw" at render time.
+  if (tlsMode === 'reality' && transport === 'tcp') {
+    transport = 'raw'
+  }
+
+  if (tlsMode === 'reality' && !['raw', 'grpc', 'xhttp'].includes(transport)) {
+    throw new Error(`xray reality does not support transport: ${transport}`)
+  }
+
   const stream = { network: transport }
 
   if (transport === 'ws') {

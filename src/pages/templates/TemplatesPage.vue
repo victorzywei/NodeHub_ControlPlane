@@ -46,6 +46,75 @@ const form = reactive({
 
 const confirmDelete = ref(false)
 
+const PROTOCOL_TLS_SUPPORT: Record<string, string[]> = {
+  vless: ['none', 'tls', 'reality'],
+  trojan: ['tls'],
+  vmess: ['none', 'tls'],
+  hysteria2: ['tls'],
+  shadowsocks2022: ['none'],
+}
+
+const PROTOCOL_TRANSPORT_SUPPORT: Record<string, string[]> = {
+  vless: ['tcp', 'ws', 'grpc'],
+  trojan: ['tcp', 'ws', 'grpc'],
+  vmess: ['tcp', 'ws', 'grpc'],
+  hysteria2: ['udp'],
+  shadowsocks2022: ['tcp', 'udp'],
+}
+
+function supportsProtocolTls(protocol: string, tlsMode: string): boolean {
+  if (!protocol || !tlsMode) return true
+  const allowed = PROTOCOL_TLS_SUPPORT[protocol]
+  if (!allowed) return true
+  return allowed.includes(tlsMode)
+}
+
+function supportsProtocolTransport(protocol: string, transport: string): boolean {
+  if (!protocol || !transport) return true
+  const allowed = PROTOCOL_TRANSPORT_SUPPORT[protocol]
+  if (!allowed) return true
+  return allowed.includes(transport)
+}
+
+function supportsComboTransport(engine: string, protocol: string, tlsMode: string, transport: string): boolean {
+  if (!supportsProtocolTransport(protocol, transport)) return false
+  if (tlsMode === 'reality') {
+    if (protocol !== 'vless') return false
+    if (transport !== 'tcp' && transport !== 'grpc') return false
+    if (engine === 'xray' && transport === 'tcp') return true
+  }
+  return true
+}
+
+const availableProtocols = computed(() => registry.value.protocols)
+
+const availableTlsModes = computed(() => {
+  return registry.value.tls_modes.filter((item) => supportsProtocolTls(form.protocol, item.key))
+})
+
+const availableTransports = computed(() => {
+  return registry.value.transports.filter((item) =>
+    supportsComboTransport(form.engine, form.protocol, form.tls_mode, item.key),
+  )
+})
+
+function ensureValidSelection(): void {
+  const protocolSet = new Set(availableProtocols.value.map((item) => item.key))
+  if (!protocolSet.has(form.protocol)) {
+    form.protocol = availableProtocols.value[0]?.key || ''
+  }
+
+  const tlsSet = new Set(availableTlsModes.value.map((item) => item.key))
+  if (!tlsSet.has(form.tls_mode)) {
+    form.tls_mode = availableTlsModes.value[0]?.key || ''
+  }
+
+  const transportSet = new Set(availableTransports.value.map((item) => item.key))
+  if (!transportSet.has(form.transport)) {
+    form.transport = availableTransports.value[0]?.key || ''
+  }
+}
+
 const filteredTemplates = computed(() => {
   if (!keyword.value.trim()) return templates.value
   const text = keyword.value.toLowerCase()
@@ -164,10 +233,11 @@ function resetCreateForm(): void {
   form.name = ''
   form.engine = registry.value.engines[0]?.key || 'sing-box'
   form.protocol = registry.value.protocols[0]?.key || ''
-  form.transport = registry.value.transports[0]?.key || ''
   form.tls_mode = registry.value.tls_modes[0]?.key || ''
+  form.transport = registry.value.transports[0]?.key || ''
   form.node_type = (registry.value.node_types[0]?.key as NodeKind) || 'vps'
   form.description = ''
+  ensureValidSelection()
   syncDefaultsForm({})
   customParamKey.value = ''
   customParamValue.value = ''
@@ -190,6 +260,7 @@ function openEdit(template: TemplateRecord): void {
   form.tls_mode = template.tls_mode
   form.node_type = (template.node_types[0] as NodeKind) || 'vps'
   form.description = template.description
+  ensureValidSelection()
   syncDefaultsForm(template.defaults || {})
   customParamKey.value = ''
   customParamValue.value = ''
@@ -228,6 +299,15 @@ async function saveTemplate(): Promise<void> {
 
     if (!form.name.trim()) {
       toastStore.push('模板名称不能为空', 'warning')
+      return
+    }
+
+    if (!supportsProtocolTls(form.protocol, form.tls_mode)) {
+      toastStore.push('当前 TLS 模式不支持该协议', 'warning')
+      return
+    }
+    if (!supportsComboTransport(form.engine, form.protocol, form.tls_mode, form.transport)) {
+      toastStore.push('当前传输类型不支持该协议/TLS 组合', 'warning')
       return
     }
 
@@ -290,7 +370,10 @@ async function removeTemplate(): Promise<void> {
 watch(
   () => [form.protocol, form.transport, form.tls_mode, form.engine],
   (newValues, oldValues) => {
-    if (!editorOpen.value || editorMode.value !== 'create') return
+    if (!editorOpen.value) return
+
+    ensureValidSelection()
+    if (editorMode.value !== 'create') return
 
     const oldProto = oldValues?.[0] || ''
     const oldTrans = oldValues?.[1] || ''
@@ -307,6 +390,14 @@ watch(
     })
 
     syncDefaultsForm(nextSource)
+  },
+)
+
+watch(
+  () => [form.protocol, form.tls_mode, form.engine],
+  () => {
+    if (!editorOpen.value) return
+    ensureValidSelection()
   },
 )
 
@@ -419,21 +510,21 @@ onMounted(loadData)
     <label>
       协议
       <select v-model="form.protocol" class="select" :disabled="editorMode === 'edit'">
-        <option v-for="item in registry.protocols" :key="item.key" :value="item.key">{{ item.label }}</option>
-      </select>
-    </label>
-
-    <label>
-      传输
-      <select v-model="form.transport" class="select" :disabled="editorMode === 'edit'">
-        <option v-for="item in registry.transports" :key="item.key" :value="item.key">{{ item.label }}</option>
+        <option v-for="item in availableProtocols" :key="item.key" :value="item.key">{{ item.label }}</option>
       </select>
     </label>
 
     <label>
       TLS 模式
       <select v-model="form.tls_mode" class="select" :disabled="editorMode === 'edit'">
-        <option v-for="item in registry.tls_modes" :key="item.key" :value="item.key">{{ item.label }}</option>
+        <option v-for="item in availableTlsModes" :key="item.key" :value="item.key">{{ item.label }}</option>
+      </select>
+    </label>
+
+    <label>
+      传输
+      <select v-model="form.transport" class="select" :disabled="editorMode === 'edit'">
+        <option v-for="item in availableTransports" :key="item.key" :value="item.key">{{ item.label }}</option>
       </select>
     </label>
 
