@@ -25,6 +25,12 @@ function randomHex(bytes: number): string {
   return Array.from(array, (value) => value.toString(16).padStart(2, '0')).join('')
 }
 
+function randomUuid(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const hex = randomHex(16)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
 function randomBase64Url(bytes: number): string {
   const array = new Uint8Array(bytes)
   crypto.getRandomValues(array)
@@ -69,6 +75,7 @@ export async function generateRealityKeyPair(): Promise<RealityKeyPair> {
 }
 
 export function generateSecretValue(key: string, ctx?: Record<string, string>): string {
+  if (key === 'uuid' || key === 'user_id' || key === 'id') return randomUuid()
   if (key === 'reality_private_key' || key === 'reality_public_key') return ''
   if (key === 'reality_short_id') return randomHex(8)
   if (key === 'password') {
@@ -101,6 +108,10 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
     valueType: 'number',
     defaultValue: defaultPort,
   })
+
+  if (protocol === 'vless' || protocol === 'vmess') {
+    fields.push({ key: 'uuid', label: 'UUID', type: 'text', valueType: 'string' })
+  }
 
   if (protocol === 'hysteria2') {
     fields.push({ key: 'password', label: 'Password', type: 'password', valueType: 'string', secret: true })

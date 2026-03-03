@@ -121,6 +121,8 @@ function syncDefaultsForm(source: Record<string, unknown>): void {
         } else {
           value = generateSecretValue(field.key, { ...next, ...source, protocol: form.protocol } as Record<string, string>)
         }
+      } else if (field.key === 'uuid') {
+        value = generateSecretValue(field.key, { ...next, ...source, protocol: form.protocol } as Record<string, string>)
       } else if (field.defaultValue !== undefined) {
         value = String(field.defaultValue)
       } else if (field.type === 'select' && field.options && field.options.length > 0) {
@@ -138,8 +140,10 @@ function hasField(key: string): boolean {
   return allParamFields.value.some((field) => field.key === key)
 }
 
-function canGenerateSingleSecret(key: string): boolean {
-  return key !== 'reality_private_key' && key !== 'reality_public_key'
+function canGenerateSingleField(field: EditorParamField): boolean {
+  if (field.key === 'uuid') return true
+  if (!field.secret) return false
+  return field.key !== 'reality_private_key' && field.key !== 'reality_public_key'
 }
 
 function canGenerateRealityPairAtField(key: string): boolean {
@@ -244,7 +248,7 @@ function openEdit(template: TemplateRecord): void {
   editorOpen.value = true
 }
 
-function regenSecret(key: string): void {
+function regenFieldValue(key: string): void {
   if (key === 'reality_private_key' || key === 'reality_public_key') {
     void regenRealityKeyPair(true, true)
     return
@@ -353,7 +357,7 @@ watch(
   (newMethod, oldMethod) => {
     if (editorOpen.value && form.protocol === 'shadowsocks2022' && newMethod && oldMethod && newMethod !== oldMethod) {
       if (defaultsForm.password) {
-        regenSecret('password')
+        regenFieldValue('password')
       }
     }
   }
@@ -499,10 +503,10 @@ onMounted(loadData)
           />
 
           <button
-            v-if="field.secret && canGenerateSingleSecret(field.key)"
+            v-if="canGenerateSingleField(field)"
             class="btn btn-secondary"
             type="button"
-            @click="regenSecret(field.key)"
+            @click="regenFieldValue(field.key)"
           >
             生成
           </button>

@@ -154,6 +154,7 @@ describe('format utilities', () => {
   it('includes reality public key field in preset params', () => {
     const fields = getPresetTemplateParamFields('vless', 'tcp', 'reality', 'xray')
     const keys = fields.map((item) => item.key)
+    expect(keys).toContain('uuid')
     expect(keys).toContain('reality_private_key')
     expect(keys).toContain('reality_public_key')
     expect(keys).toContain('reality_short_id')
