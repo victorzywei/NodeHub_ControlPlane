@@ -174,10 +174,11 @@ async function refreshPublishPreview(): Promise<void> {
     const preview = await previewNodePublish(publishNode.value.id, publishTemplateIds.value)
     if (seq !== publishPreviewSeq) return
     publishPreview.value = preview
-  } catch {
+  } catch (error) {
     if (seq !== publishPreviewSeq) return
     publishPreview.value = null
-    publishPreviewError.value = '预览生成失败'
+    const message = error instanceof Error ? error.message : ''
+    publishPreviewError.value = message ? `预览生成失败：${message}` : '预览生成失败'
   } finally {
     if (seq === publishPreviewSeq) {
       publishPreviewLoading.value = false
