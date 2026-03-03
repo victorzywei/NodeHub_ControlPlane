@@ -26,6 +26,44 @@ function randomHex(bytes = 16) {
   return Array.from(buffer, (item) => item.toString(16).padStart(2, '0')).join('')
 }
 
+function bytesToBase64(bytes) {
+  let binary = ''
+  for (const value of bytes) binary += String.fromCharCode(value)
+  return btoa(binary)
+}
+
+function randomBase64Url(bytes = 32) {
+  const buffer = crypto.getRandomValues(new Uint8Array(bytes))
+  return bytesToBase64(buffer).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function hexToBytes(hex) {
+  const value = String(hex || '').trim().toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(value)) return null
+  const out = new Uint8Array(32)
+  for (let i = 0; i < 32; i += 1) {
+    out[i] = Number.parseInt(value.slice(i * 2, i * 2 + 2), 16)
+  }
+  return out
+}
+
+function normalizeRealityPrivateKey(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return randomBase64Url(32)
+
+  if (/^[A-Za-z0-9_-]{43}$/.test(raw)) return raw
+  if (/^[A-Za-z0-9+/]{43}=$/.test(raw) || /^[A-Za-z0-9+/]{44}$/.test(raw)) {
+    return raw.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  }
+
+  const hexBytes = hexToBytes(raw)
+  if (hexBytes) {
+    return bytesToBase64(hexBytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  }
+
+  return randomBase64Url(32)
+}
+
 function ensureValue(target, key, valueFactory) {
   if (!isEmptyValue(target[key])) return
   target[key] = valueFactory()
@@ -51,7 +89,7 @@ export function applyTemplateAutoDefaults({ protocol, transport, tlsMode, defaul
   if (p === 'vless' && tls === 'reality') {
     ensureValue(next, 'flow', () => 'xtls-rprx-vision')
     ensureValue(next, 'server_name', () => '')
-    ensureValue(next, 'reality_private_key', () => randomHex(32))
+    next.reality_private_key = normalizeRealityPrivateKey(next.reality_private_key)
     ensureValue(next, 'reality_short_id', () => randomHex(8))
   }
 

@@ -25,8 +25,16 @@ function randomHex(bytes: number): string {
   return Array.from(array, (value) => value.toString(16).padStart(2, '0')).join('')
 }
 
+function randomBase64Url(bytes: number): string {
+  const array = new Uint8Array(bytes)
+  crypto.getRandomValues(array)
+  let binary = ''
+  for (const value of array) binary += String.fromCharCode(value)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
 export function generateSecretValue(key: string, ctx?: Record<string, string>): string {
-  if (key === 'reality_private_key') return randomHex(32)
+  if (key === 'reality_private_key') return randomBase64Url(32)
   if (key === 'reality_short_id') return randomHex(8)
   if (key === 'password') {
     if (ctx?.['protocol'] === 'shadowsocks2022') {
