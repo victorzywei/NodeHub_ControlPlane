@@ -31,8 +31,6 @@ const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingTemplate = ref<TemplateRecord | null>(null)
 const defaultsForm = reactive<Record<string, string>>({})
-const customParamKey = ref('')
-const customParamValue = ref('')
 
 const form = reactive({
   name: '',
@@ -134,22 +132,8 @@ const presetParamFields = computed<EditorParamField[]>(() => {
   return getPresetTemplateParamFields(form.protocol, form.transport, form.tls_mode, form.engine)
 })
 
-const presetParamKeySet = computed(() => new Set(presetParamFields.value.map((item) => item.key)))
-
-const extraParamFields = computed<EditorParamField[]>(() => {
-  return Object.keys(defaultsForm)
-    .filter((key) => !presetParamKeySet.value.has(key))
-    .map((key) => ({
-      key,
-      label: key,
-      type: 'text',
-      valueType: 'string',
-      custom: true,
-    }))
-})
-
 const allParamFields = computed<EditorParamField[]>(() => {
-  return [...presetParamFields.value, ...extraParamFields.value]
+  return presetParamFields.value
 })
 
 function replaceDefaultsForm(next: Record<string, string>): void {
@@ -163,10 +147,8 @@ function replaceDefaultsForm(next: Record<string, string>): void {
 
 function syncDefaultsForm(source: Record<string, unknown>): void {
   const next: Record<string, string> = {}
-  const consumed = new Set<string>()
 
   presetParamFields.value.forEach((field) => {
-    consumed.add(field.key)
     const raw = source[field.key]
     let value = valueToInput(raw)
 
@@ -183,28 +165,25 @@ function syncDefaultsForm(source: Record<string, unknown>): void {
     next[field.key] = value
   })
 
-  Object.entries(source).forEach(([key, value]) => {
-    if (consumed.has(key)) return
-    next[key] = valueToInput(value)
-  })
-
   replaceDefaultsForm(next)
 }
 
 function buildDefaultsPayload(): Record<string, unknown> {
   const result: Record<string, unknown> = {}
-  const fieldMap = new Map(allParamFields.value.map((field) => [field.key, field]))
+  const fieldMap = new Map(presetParamFields.value.map((field) => [field.key, field]))
 
-  Object.entries(defaultsForm).forEach(([key, rawValue]) => {
+  presetParamFields.value.forEach((field) => {
+    const key = field.key
+    const rawValue = defaultsForm[key]
     const value = String(rawValue ?? '')
-    const field = fieldMap.get(key)
+    const currentField = fieldMap.get(key)
 
     if (value.trim() === '') {
-      if (field?.optional) result[key] = ''
+      if (currentField?.optional) result[key] = ''
       return
     }
 
-    if (field?.valueType === 'number') {
+    if (currentField?.valueType === 'number') {
       const num = Number(value)
       result[key] = Number.isFinite(num) ? num : value
       return
@@ -239,8 +218,6 @@ function resetCreateForm(): void {
   form.description = ''
   ensureValidSelection()
   syncDefaultsForm({})
-  customParamKey.value = ''
-  customParamValue.value = ''
 }
 
 function openCreate(): void {
@@ -262,31 +239,7 @@ function openEdit(template: TemplateRecord): void {
   form.description = template.description
   ensureValidSelection()
   syncDefaultsForm(template.defaults || {})
-  customParamKey.value = ''
-  customParamValue.value = ''
   editorOpen.value = true
-}
-
-function addCustomParam(): void {
-  const key = customParamKey.value.trim()
-  if (!key) {
-    toastStore.push('参数名不能为空', 'warning')
-    return
-  }
-
-  if (defaultsForm[key] !== undefined) {
-    toastStore.push('参数已存在', 'warning')
-    return
-  }
-
-  defaultsForm[key] = customParamValue.value
-  customParamKey.value = ''
-  customParamValue.value = ''
-}
-
-function removeCustomParam(key: string): void {
-  if (presetParamKeySet.value.has(key)) return
-  delete defaultsForm[key]
 }
 
 function regenSecret(key: string): void {
@@ -369,26 +322,12 @@ async function removeTemplate(): Promise<void> {
 
 watch(
   () => [form.protocol, form.transport, form.tls_mode, form.engine],
-  (newValues, oldValues) => {
+  () => {
     if (!editorOpen.value) return
 
     ensureValidSelection()
     if (editorMode.value !== 'create') return
-
-    const oldProto = oldValues?.[0] || ''
-    const oldTrans = oldValues?.[1] || ''
-    const oldTls = oldValues?.[2] || ''
-    const oldEngine = oldValues?.[3] || ''
-
-    const oldPresetKeys = new Set(getPresetTemplateParamFields(oldProto, oldTrans, oldTls, oldEngine).map((field) => field.key))
-
-    const nextSource: Record<string, unknown> = {}
-    Object.keys(defaultsForm).forEach((key) => {
-      if (!oldPresetKeys.has(key)) {
-        nextSource[key] = defaultsForm[key]
-      }
-    })
-
+    const nextSource: Record<string, unknown> = { ...defaultsForm }
     syncDefaultsForm(nextSource)
   },
 )
@@ -515,7 +454,7 @@ onMounted(loadData)
     </label>
 
     <label>
-      TLS 模式
+      安全
       <select v-model="form.tls_mode" class="select" :disabled="editorMode === 'edit'">
         <option v-for="item in availableTlsModes" :key="item.key" :value="item.key">{{ item.label }}</option>
       </select>
@@ -543,7 +482,7 @@ onMounted(loadData)
     </label>
 
     <article class="panel panel-pad" style="display: grid; gap: 10px">
-      <strong>参数编辑器</strong>
+      <strong>细节参数</strong>
 
       <label v-for="field in allParamFields" :key="field.key" style="display: grid; gap: 6px">
         <span style="font-weight: 700">{{ field.label }}</span>
@@ -567,20 +506,10 @@ onMounted(loadData)
           />
 
           <button v-if="field.secret" class="btn btn-secondary" type="button" @click="regenSecret(field.key)">生成</button>
-          <button v-if="field.custom" class="btn btn-danger" type="button" @click="removeCustomParam(field.key)">移除</button>
         </div>
       </label>
 
-      <div style="display: grid; gap: 6px; margin-top: 6px">
-        <span style="font-weight: 700">添加自定义参数</span>
-        <div style="display: flex; gap: 8px">
-          <input v-model="customParamKey" class="input" placeholder="参数名" style="flex: 1" />
-          <input v-model="customParamValue" class="input" placeholder="参数值" style="flex: 1" />
-          <button class="btn btn-secondary" type="button" @click="addCustomParam">添加</button>
-        </div>
-      </div>
-
-      <div class="muted" style="font-size: 12px">可枚举参数自动使用下拉框，其他参数使用输入框。</div>
+      <div class="muted" style="font-size: 12px">仅显示当前“协议 + 安全 + 传输”组合支持的参数，避免无效配置。</div>
     </article>
 
     <div style="display: flex; gap: 8px">
