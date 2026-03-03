@@ -26,6 +26,11 @@ export async function onRequestGet({ request, env, params }) {
     ` --node-token ${quoteShell(node.token)}`,
     ` --heartbeat-interval ${quoteShell('600')}`,
   ]
+  const installWarp = node.install_warp === true || (node.install_warp === undefined && Boolean(String(node.warp_license || '').trim()))
+  const installArgo = node.install_argo === true || (
+    node.install_argo === undefined &&
+    (Boolean(String(node.argo_token || '').trim()) || Boolean(String(node.argo_domain || '').trim()))
+  )
 
   if (node.entry_cdn) {
     commandParts.push(` --tls-domain ${quoteShell(node.entry_cdn)}`)
@@ -39,14 +44,20 @@ export async function onRequestGet({ request, env, params }) {
   if (node.cf_api_token) {
     commandParts.push(` --cf-api-token ${quoteShell(node.cf_api_token)}`)
   }
-  if (node.warp_license) {
-    commandParts.push(` --warp-license ${quoteShell(node.warp_license)}`)
+  if (installWarp) {
+    commandParts.push(' --install-warp')
+    if (node.warp_license) {
+      commandParts.push(` --warp-license ${quoteShell(node.warp_license)}`)
+    }
   }
-  if (node.argo_token) {
-    commandParts.push(` --argo-token ${quoteShell(node.argo_token)}`)
-  }
-  if (node.argo_domain) {
-    commandParts.push(` --argo-domain ${quoteShell(node.argo_domain)}`)
+  if (installArgo) {
+    commandParts.push(' --install-argo')
+    if (node.argo_token) {
+      commandParts.push(` --argo-token ${quoteShell(node.argo_token)}`)
+    }
+    if (node.argo_domain) {
+      commandParts.push(` --argo-domain ${quoteShell(node.argo_domain)}`)
+    }
   }
 
   return ok({ command: commandParts.join('') })

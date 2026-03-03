@@ -44,6 +44,11 @@ function ensureUniqueTemplatePorts(templates) {
   throw new Error(`模板端口冲突: ${message}`)
 }
 
+function normalizeWarpRouteMode(value) {
+  const mode = String(value || 'all').toLowerCase()
+  return mode === 'ipv4' || mode === 'ipv6' ? mode : 'all'
+}
+
 export function normalizeTemplateNodeTypes(values) {
   const nodeTypes = uniqStringArray(values).filter((item) => NODE_TYPES.has(item))
   return nodeTypes.length > 0 ? nodeTypes : ['vps', 'edge']
@@ -69,6 +74,8 @@ function mergeTemplate(base, override) {
     description: override?.description || base.description,
     engine: normalizeTemplateEngine(override?.engine || base.engine),
     node_types: normalizeTemplateNodeTypes(override?.node_types || base.node_types),
+    warp_exit: override?.warp_exit === true || base.warp_exit === true,
+    warp_route_mode: normalizeWarpRouteMode(override?.warp_route_mode || base.warp_route_mode),
     defaults: {
       ...(base.defaults || {}),
       ...(override?.defaults || {}),

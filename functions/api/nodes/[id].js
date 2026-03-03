@@ -31,6 +31,23 @@ export async function onRequestPatch({ request, env, params }) {
     }
   })
 
+  if (body.install_warp !== undefined) {
+    node.install_warp = body.install_warp === true
+  } else if (body.warp_license !== undefined && String(body.warp_license || '').trim().length > 0) {
+    node.install_warp = true
+  }
+
+  if (body.install_argo !== undefined) {
+    node.install_argo = body.install_argo === true
+  } else if (
+    body.argo_token !== undefined ||
+    body.argo_domain !== undefined
+  ) {
+    const token = String(body.argo_token !== undefined ? body.argo_token : node.argo_token || '').trim()
+    const domain = String(body.argo_domain !== undefined ? body.argo_domain : node.argo_domain || '').trim()
+    if (token || domain) node.install_argo = true
+  }
+
   if (body.tags !== undefined) {
     node.tags = Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : []
   }

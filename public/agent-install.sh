@@ -25,6 +25,8 @@ CONFIG_ROOT="/etc/nodehub-agent"
 WARP_LICENSE=""
 ARGO_TOKEN=""
 ARGO_DOMAIN=""
+INSTALL_WARP=0
+INSTALL_ARGO=0
 
 # ---------- Helpers ----------
 log()  { printf '%s\n' "[INFO] $*"; }
@@ -142,7 +144,9 @@ Options:
   --tls-domain-alt <domain>
   --github-mirror <mirror_prefix>   e.g. https://ghproxy.com
   --cf-api-token <token>           Cloudflare API token for DNS validation
+  --install-warp                   install and register warp-go
   --warp-license <key>             WARP+ license key for warp-go registration
+  --install-argo                   install cloudflared and start tunnel
   --argo-token <token>             Cloudflare Tunnel token (fixed tunnel)
   --argo-domain <domain>           Cloudflare Tunnel fixed domain
   --heartbeat-interval <seconds>   default: 600
@@ -167,7 +171,9 @@ while [[ $# -gt 0 ]]; do
     --tls-domain-alt)   need_value "$1" "${2:-}"; TLS_DOMAIN_ALT="$2"; shift 2 ;;
     --github-mirror)    need_value "$1" "${2:-}"; GITHUB_MIRROR="$2"; shift 2 ;;
     --cf-api-token)     need_value "$1" "${2:-}"; CF_API_TOKEN="$2"; shift 2 ;;
+    --install-warp)     INSTALL_WARP=1; shift ;;
     --warp-license)     need_value "$1" "${2:-}"; WARP_LICENSE="$2"; shift 2 ;;
+    --install-argo)     INSTALL_ARGO=1; shift ;;
     --argo-token)       need_value "$1" "${2:-}"; ARGO_TOKEN="$2"; shift 2 ;;
     --argo-domain)      need_value "$1" "${2:-}"; ARGO_DOMAIN="$2"; shift 2 ;;
     --heartbeat-interval) need_value "$1" "${2:-}"; HEARTBEAT_INTERVAL="$2"; shift 2 ;;
@@ -184,6 +190,15 @@ done
   usage
   die "Missing required args: --api-base --node-id --node-token"
 }
+
+# Backward compatibility for older control-plane commands:
+# If explicit install flags are absent, infer intent from legacy params.
+if [[ "$INSTALL_WARP" -ne 1 && -n "$WARP_LICENSE" ]]; then
+  INSTALL_WARP=1
+fi
+if [[ "$INSTALL_ARGO" -ne 1 ]] && ([[ -n "$ARGO_TOKEN" ]] || [[ -n "$ARGO_DOMAIN" ]]); then
+  INSTALL_ARGO=1
+fi
 
 # ---------- Basic deps ----------
 require_or_install curl curl ca-certificates || die "curl is required (install it and retry)."
@@ -394,7 +409,8 @@ install_cloudflared() {
   esac
 
   local url
-  url="$(wrap_url "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}")"
+  # Cloudflared must be fetched from official upstream binary release.
+  url="$(direct_url "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}")"
 
   log "Downloading cloudflared: $url"
   mkdir -p "$(dirname "$CLOUDFLARED_BIN")" || true
@@ -403,8 +419,12 @@ install_cloudflared() {
   log "cloudflared installed to: $CLOUDFLARED_BIN"
 }
 
-log "Installing cloudflared (best-effort)..."
-install_cloudflared || true
+if [[ "$INSTALL_ARGO" -eq 1 ]]; then
+  log "Installing cloudflared (best-effort)..."
+  install_cloudflared || true
+else
+  log "Argo install not enabled, skipping cloudflared."
+fi
 
 # ---------- Install warp-go + register ----------
 WARPGO_BIN=""
@@ -442,7 +462,6 @@ install_warpgo() {
 }
 
 register_warp() {
-  [[ -n "$WARP_LICENSE" ]] || return 0
   [[ -x "$WARPGO_BIN" ]] || { warn "warp-go not installed, skipping WARP registration"; return 1; }
 
   local warp_dir="$STATE_DIR/warp"
@@ -492,7 +511,7 @@ register_warp() {
   log "WARP registered: v6=$v6 endpoint=$endpoint"
 }
 
-if [[ -n "$WARP_LICENSE" ]]; then
+if [[ "$INSTALL_WARP" -eq 1 ]]; then
   log "Installing warp-go and registering WARP..."
   install_warpgo || true
   register_warp || true
@@ -538,7 +557,7 @@ start_argo_tunnel() {
   fi
 }
 
-if [[ -n "$ARGO_TOKEN" ]] || [[ -n "$ARGO_DOMAIN" ]]; then
+if [[ "$INSTALL_ARGO" -eq 1 ]]; then
   start_argo_tunnel || true
 fi
 

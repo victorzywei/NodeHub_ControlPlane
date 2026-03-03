@@ -41,7 +41,9 @@ const form = reactive({
   entry_ip: '',
   github_mirror: '',
   cf_api_token: '',
+  install_warp: false,
   warp_license: '',
+  install_argo: false,
   argo_token: '',
   argo_domain: '',
 })
@@ -115,7 +117,9 @@ function toPayload(): Partial<NodeRecord> {
     entry_ip: form.entry_ip.trim(),
     github_mirror: form.github_mirror.trim(),
     cf_api_token: form.cf_api_token.trim(),
+    install_warp: form.install_warp,
     warp_license: form.warp_license.trim(),
+    install_argo: form.install_argo,
     argo_token: form.argo_token.trim(),
     argo_domain: form.argo_domain.trim(),
   } as Partial<NodeRecord>
@@ -131,7 +135,9 @@ function fillForm(node?: NodeRecord): void {
   form.entry_ip = node?.entry_ip || ''
   form.github_mirror = node?.github_mirror || ''
   form.cf_api_token = node?.cf_api_token || ''
+  form.install_warp = node?.install_warp || false
   form.warp_license = node?.warp_license || ''
+  form.install_argo = node?.install_argo || false
   form.argo_token = node?.argo_token || ''
   form.argo_domain = node?.argo_domain || ''
 }
@@ -466,6 +472,7 @@ onMounted(loadNodesData)
       <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">WARP 出口</div>
+      <div>安装：{{ detailNode.install_warp ? '已启用' : '未启用' }}</div>
       <div>License：{{ detailNode.warp_license ? '已配置' : '未配置' }}</div>
       <div>注册状态：
         <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
@@ -475,11 +482,13 @@ onMounted(loadNodesData)
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">Argo 隧道</div>
       <div>配置：
-        <span class="badge" :class="detailNode.argo_token ? 'success' : (detailNode.argo_status ? 'success' : 'warning')">{{ detailNode.argo_token ? '固定隧道' : (detailNode.argo_status && detailNode.argo_status !== 'off' ? '临时隧道' : '未配置') }}</span>
+        <span class="badge" :class="detailNode.install_argo ? 'success' : 'warning'">
+          {{ detailNode.install_argo ? (detailNode.argo_token ? '固定隧道' : '临时隧道') : '未启用' }}
+        </span>
       </div>
-      <div v-if="detailNode.argo_domain">域名：{{ detailNode.argo_domain }}</div>
-      <div v-if="detailNode.argo_temp_domain">临时域名：{{ detailNode.argo_temp_domain }}</div>
-      <div v-if="detailNode.argo_status">运行状态：{{ detailNode.argo_status }}</div>
+      <div v-if="detailNode.install_argo && detailNode.argo_domain">域名：{{ detailNode.argo_domain }}</div>
+      <div v-if="detailNode.install_argo && detailNode.argo_temp_domain">临时域名：{{ detailNode.argo_temp_domain }}</div>
+      <div v-if="detailNode.install_argo && detailNode.argo_status">运行状态：{{ detailNode.argo_status }}</div>
       <button class="btn btn-secondary" style="margin-top: 8px" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
       <template v-if="detailInstallCommand">
         <div class="muted" style="margin-top: 16px; font-weight: 600">VPS 安装命令</div>
@@ -541,27 +550,39 @@ onMounted(loadNodesData)
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
       <div style="font-weight: 700; margin-bottom: 10px">WARP 出口</div>
-      <label>
-        WARP+ License Key (可选)
-        <input v-model="form.warp_license" class="input" placeholder="Agent 安装时自动注册并上报密钥" />
+      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+        <input type="checkbox" v-model="form.install_warp" />
+        <span>安装 WARP（warp-go）</span>
       </label>
+      <template v-if="form.install_warp">
+        <label>
+          WARP+ License Key (可选)
+          <input v-model="form.warp_license" class="input" placeholder="Agent 安装时自动注册并上报密钥" />
+        </label>
+      </template>
       <div class="muted" style="font-size: 12px">
-        填写后安装命令包含 --warp-license，Agent 自动注册密钥并上报。在模板编辑器中勾选"WARP 出口"启用。
+        勾选后安装命令包含 --install-warp；可选填写 License 升级 WARP+。在模板编辑器中勾选"WARP 出口"启用路由。
       </div>
     </div>
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
       <div style="font-weight: 700; margin-bottom: 10px">Argo 隧道</div>
-      <label>
-        Tunnel Token (可选)
-        <input v-model="form.argo_token" class="input" placeholder="固定隧道 Token，留空使用临时隧道" />
+      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+        <input type="checkbox" v-model="form.install_argo" />
+        <span>安装 Argo（cloudflared）</span>
       </label>
-      <label>
-        域名 (可选)
-        <input v-model="form.argo_domain" class="input" placeholder="固定隧道域名" />
-      </label>
+      <template v-if="form.install_argo">
+        <label>
+          Tunnel Token (可选)
+          <input v-model="form.argo_token" class="input" placeholder="固定隧道 Token，留空使用临时隧道" />
+        </label>
+        <label>
+          域名 (可选)
+          <input v-model="form.argo_domain" class="input" placeholder="固定隧道域名" />
+        </label>
+      </template>
       <div class="muted" style="font-size: 12px">
-        有 Token：固定隧道。无 Token：Agent 自动申请 TryCloudflare 临时域名。
+        勾选后安装命令包含 --install-argo，并下载官方 cloudflared 二进制。有 Token：固定隧道；无 Token：TryCloudflare 临时隧道。
       </div>
     </div>
 

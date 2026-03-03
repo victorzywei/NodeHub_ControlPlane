@@ -53,6 +53,12 @@ export function normalizeNode(node) {
   const currentArtifact = toArtifactRef(node.current_artifact)
   const targetVersion = toVersion(node.target_version)
   const currentVersion = toVersion(node.current_version)
+  const installWarp = node.install_warp !== undefined
+    ? toBool(node.install_warp)
+    : toString(node.warp_license).trim().length > 0
+  const installArgo = node.install_argo !== undefined
+    ? toBool(node.install_argo)
+    : (toString(node.argo_token).trim().length > 0 || toString(node.argo_domain).trim().length > 0)
 
   return {
     id: toString(node.id),
@@ -87,6 +93,7 @@ export function normalizeNode(node) {
     last_release_message: toString(node.last_release_message),
 
     // WARP - user config
+    install_warp: installWarp,
     warp_license: toString(node.warp_license),
     // WARP - agent-reported
     warp_private_key: toString(node.warp_private_key),
@@ -96,6 +103,7 @@ export function normalizeNode(node) {
     warp_status: toString(node.warp_status),
 
     // Argo - user config
+    install_argo: installArgo,
     argo_token: toString(node.argo_token),
     argo_domain: toString(node.argo_domain),
     // Argo - agent-reported

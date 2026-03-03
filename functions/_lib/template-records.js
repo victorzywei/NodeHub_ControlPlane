@@ -8,6 +8,11 @@ export function toDefaults(value) {
   return value
 }
 
+function normalizeWarpRouteMode(value) {
+  const mode = String(value || 'all').toLowerCase()
+  return mode === 'ipv4' || mode === 'ipv6' ? mode : 'all'
+}
+
 export function engineSupportsProtocol(engine, protocol) {
   return true
 }
@@ -21,6 +26,8 @@ async function buildBuiltinRow(kv, base) {
   const override = await kvGetJson(kv, KEY.templateOverride(base.id), null)
   const engine = normalizeTemplateEngine(override?.engine || base.engine)
   const nodeTypes = normalizeTemplateNodeTypes(override?.node_types || base.node_types)
+  const warpExit = override?.warp_exit === true || base.warp_exit === true
+  const warpRouteMode = normalizeWarpRouteMode(override?.warp_route_mode || base.warp_route_mode)
   const mergedDefaults = {
     ...(base.defaults || {}),
     ...(override?.defaults || {}),
@@ -52,6 +59,8 @@ async function buildBuiltinRow(kv, base) {
     description: effectiveOverride?.description || base.description,
     engine,
     node_types: nodeTypes,
+    warp_exit: warpExit,
+    warp_route_mode: warpRouteMode,
     defaults: {
       ...(base.defaults || {}),
       ...(effectiveOverride?.defaults || {}),
@@ -75,5 +84,7 @@ export function normalizeCustomTemplate(row) {
     ...row,
     engine: normalizeTemplateEngine(row.engine),
     node_types: normalizeTemplateNodeTypes(row.node_types),
+    warp_exit: row.warp_exit === true,
+    warp_route_mode: normalizeWarpRouteMode(row.warp_route_mode),
   }
 }

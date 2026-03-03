@@ -25,6 +25,13 @@ export async function onRequestPost({ request, env }) {
   const body = await request.json().catch(() => ({}))
   const name = String(body.name || '').trim()
   const nodeType = String(body.node_type || '').trim()
+  const warpLicense = String(body.warp_license || '')
+  const argoToken = String(body.argo_token || '')
+  const argoDomain = String(body.argo_domain || '')
+  const installWarp = body.install_warp !== undefined ? body.install_warp === true : warpLicense.trim().length > 0
+  const installArgo = body.install_argo !== undefined
+    ? body.install_argo === true
+    : (argoToken.trim().length > 0 || argoDomain.trim().length > 0)
 
   if (!name) return fail('VALIDATION', 'name is required', 400)
   if (!['vps', 'edge'].includes(nodeType)) {
@@ -64,7 +71,8 @@ export async function onRequestPost({ request, env }) {
     last_release_message: '',
 
     // WARP - user config
-    warp_license: String(body.warp_license || ''),
+    install_warp: installWarp,
+    warp_license: warpLicense,
     // WARP - agent-reported
     warp_private_key: '',
     warp_v6: '',
@@ -73,8 +81,9 @@ export async function onRequestPost({ request, env }) {
     warp_status: '',
 
     // Argo - user config
-    argo_token: String(body.argo_token || ''),
-    argo_domain: String(body.argo_domain || ''),
+    install_argo: installArgo,
+    argo_token: argoToken,
+    argo_domain: argoDomain,
     // Argo - agent-reported
     argo_status: '',
     argo_temp_domain: '',

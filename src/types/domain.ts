@@ -83,6 +83,7 @@ export interface NodeRecord {
   last_release_message: string
 
   // WARP - user config (install param)
+  install_warp: boolean
   warp_license: string
   // WARP - agent-reported (heartbeat)
   warp_private_key: string
@@ -92,6 +93,7 @@ export interface NodeRecord {
   warp_status: string
 
   // Argo - user config (install param)
+  install_argo: boolean
   argo_token: string
   argo_domain: string
   // Argo - agent-reported (heartbeat)
