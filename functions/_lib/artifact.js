@@ -371,7 +371,7 @@ function buildXrayStreamSettings(template, settings) {
   } else if (transport === 'xhttp') {
     stream.xhttpSettings = {
       path: text(settings.path || '/'),
-      host: text(settings.host || '') ? [text(settings.host || '')] : undefined,
+      host: text(settings.host || '') || undefined,
     }
   } else if (transport === 'kcp') {
     stream.kcpSettings = {
