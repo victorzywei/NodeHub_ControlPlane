@@ -276,12 +276,13 @@ function buildSingboxInbound(template, params, idx) {
   }
 
   if (protocol === 'vmess') {
+    const user = toUser(template, settings)
     return {
       type: 'vmess',
       tag: `in-${idx + 1}-vmess`,
       listen: '::',
       listen_port: listenPort,
-      users: [toUser(template, settings)],
+      users: [{ uuid: user.uuid }],
       tls: applyTlsForSingbox(template, settings),
       transport: applyTransportForSingbox(template, settings),
     }
