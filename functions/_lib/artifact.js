@@ -339,7 +339,8 @@ function buildSingboxConfig(templates, params) {
 }
 
 function buildXrayStreamSettings(template, settings) {
-  const transport = text(template.transport).toLowerCase() || 'tcp'
+  const protocol = text(template.protocol).toLowerCase()
+  const transport = protocol === 'hysteria2' ? 'hysteria' : (text(template.transport).toLowerCase() || 'tcp')
   const tlsMode = text(template.tls_mode).toLowerCase()
   const stream = { network: transport }
 
@@ -356,6 +357,11 @@ function buildXrayStreamSettings(template, settings) {
     stream.httpupgradeSettings = {
       host: text(settings.host || ''),
       path: text(settings.path || '/'),
+    }
+  } else if (transport === 'hysteria') {
+    stream.hysteriaSettings = {
+      version: 2,
+      auth: text(settings.password || ''),
     }
   }
 
@@ -456,7 +462,18 @@ function buildXrayInbound(template, params, idx) {
   }
 
   if (protocol === 'hysteria2') {
-    throw new Error('hysteria2 is not supported by xray engine')
+    const user = toUser(template, settings)
+    return {
+      tag: `in-${idx + 1}-hysteria2`,
+      listen: '::',
+      port: listenPort,
+      protocol: 'hysteria',
+      settings: {
+        version: 2,
+        clients: [{ auth: user.password }],
+      },
+      streamSettings,
+    }
   }
 
   throw new Error(`unsupported template protocol for xray: ${template.protocol}`)

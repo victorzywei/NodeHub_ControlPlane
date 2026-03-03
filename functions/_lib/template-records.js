@@ -9,7 +9,6 @@ export function toDefaults(value) {
 }
 
 export function engineSupportsProtocol(engine, protocol) {
-  if (engine === 'xray' && protocol === 'hysteria2') return false
   return true
 }
 

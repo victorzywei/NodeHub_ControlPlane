@@ -231,8 +231,6 @@ async function saveTemplate(): Promise<void> {
       return
     }
 
-
-
     for (const field of presetParamFields.value) {
       const val = defaults[field.key]
       if (val === undefined || val === '') {
