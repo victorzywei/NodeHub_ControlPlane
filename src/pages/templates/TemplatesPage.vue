@@ -138,6 +138,10 @@ function hasField(key: string): boolean {
   return allParamFields.value.some((field) => field.key === key)
 }
 
+function canGenerateSingleSecret(key: string): boolean {
+  return key !== 'reality_private_key' && key !== 'reality_public_key'
+}
+
 async function regenRealityKeyPair(force = true, notify = true): Promise<void> {
   if (!hasField('reality_private_key') || !hasField('reality_public_key')) return
   if (generatingRealityPair.value) return
@@ -509,7 +513,14 @@ onMounted(loadData)
             :placeholder="field.placeholder || ''"
           />
 
-          <button v-if="field.secret" class="btn btn-secondary" type="button" @click="regenSecret(field.key)">生成</button>
+          <button
+            v-if="field.secret && canGenerateSingleSecret(field.key)"
+            class="btn btn-secondary"
+            type="button"
+            @click="regenSecret(field.key)"
+          >
+            生成
+          </button>
         </div>
       </label>
 
