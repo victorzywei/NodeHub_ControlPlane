@@ -24,14 +24,23 @@ function randomHex(bytes: number): string {
   return Array.from(array, (value) => value.toString(16).padStart(2, '0')).join('')
 }
 
-export function generateSecretValue(key: string): string {
+export function generateSecretValue(key: string, ctx?: Record<string, string>): string {
   if (key === 'reality_private_key') return randomHex(32)
   if (key === 'reality_short_id') return randomHex(8)
-  if (key === 'password') return randomHex(16)
+  if (key === 'password') {
+    if (ctx?.['protocol'] === 'shadowsocks2022') {
+      const method = ctx?.['method'] || '2022-blake3-aes-128-gcm'
+      const bytes = method.includes('128') ? 16 : 32
+      const array = new Uint8Array(bytes)
+      crypto.getRandomValues(array)
+      return btoa(String.fromCharCode(...array))
+    }
+    return randomHex(16)
+  }
   return randomHex(16)
 }
 
-export function getPresetTemplateParamFields(protocol: string, transport: string, tlsMode: string): TemplateParamField[] {
+export function getPresetTemplateParamFields(protocol: string, transport: string, tlsMode: string, engine: string): TemplateParamField[] {
   const fields: TemplateParamField[] = []
 
   let defaultPort = 443
@@ -71,9 +80,25 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
   }
 
   if (tlsMode === 'reality') {
-    fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '' })
+    const REALITY_SNI_OPTIONS = [
+      { value: 'www.microsoft.com', label: 'www.microsoft.com' },
+      { value: 'www.apple.com', label: 'www.apple.com' },
+      { value: 'www.nvidia.com', label: 'www.nvidia.com' },
+      { value: 'aws.amazon.com', label: 'aws.amazon.com' },
+      { value: 'gateway.icloud.com', label: 'gateway.icloud.com' },
+      { value: 'itunes.apple.com', label: 'itunes.apple.com' },
+      { value: 'www.dbs.com.sg', label: 'www.dbs.com.sg' },
+      { value: 'www.hsbc.com.hk', label: 'www.hsbc.com.hk' }
+    ]
+    const randomSni = REALITY_SNI_OPTIONS[Math.floor(Math.random() * REALITY_SNI_OPTIONS.length)].value
+
+    fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'select', valueType: 'string', options: REALITY_SNI_OPTIONS, defaultValue: randomSni })
     fields.push({ key: 'reality_private_key', label: 'Reality Private Key', type: 'password', valueType: 'string', secret: true })
     fields.push({ key: 'reality_short_id', label: 'Reality Short ID', type: 'password', valueType: 'string', secret: true })
+
+    if (engine === 'xray') {
+      fields.push({ key: 'dest', label: 'Reality Dest', type: 'text', valueType: 'string', placeholder: 'example.com:443', defaultValue: `${randomSni}:443` })
+    }
   } else if (tlsMode === 'tls') {
     fields.push({ key: 'sni', label: 'SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '' })
   }

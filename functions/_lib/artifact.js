@@ -97,11 +97,12 @@ function buildTemplateSettings(template, params) {
   }
 }
 
-function normalizeTemplateSettings(template, sourceSettings) {
+function normalizeTemplateSettings(template, sourceSettings, node) {
   const settings = { ...(sourceSettings || {}) }
   const protocol = text(template?.protocol).toLowerCase()
   const transport = text(template?.transport).toLowerCase()
   const tlsMode = text(template?.tls_mode).toLowerCase()
+  const fallbackDomain = node ? text(node.entry_cdn || node.entry_direct) : ''
 
   if (protocol === 'vless' || protocol === 'vmess') {
     const user = toUser(template, settings)
@@ -124,7 +125,7 @@ function normalizeTemplateSettings(template, sourceSettings) {
 
   if (transport === 'ws' || transport === 'h2' || transport === 'httpupgrade') {
     if (!text(settings.path)) settings.path = '/'
-    if (settings.host === undefined || settings.host === null) settings.host = ''
+    if (settings.host === undefined || settings.host === null || text(settings.host) === '') settings.host = fallbackDomain
   } else if (transport === 'grpc') {
     if (!text(settings.service_name)) settings.service_name = 'grpc'
   }
@@ -147,17 +148,22 @@ function normalizeTemplateSettings(template, sourceSettings) {
     settings.down_mbps = num(settings.down_mbps, 100)
   }
 
+  if (fallbackDomain) {
+    if (tlsMode === 'tls' && !text(settings.sni)) settings.sni = fallbackDomain
+    if (tlsMode === 'reality' && !text(settings.server_name)) settings.server_name = fallbackDomain
+  }
+
   return settings
 }
 
-function decorateTemplateWithResolvedSettings(template, params) {
+function decorateTemplateWithResolvedSettings(template, params, node) {
   return {
     ...template,
-    __resolved_settings: normalizeTemplateSettings(template, buildTemplateSettings(template, params)),
+    __resolved_settings: normalizeTemplateSettings(template, buildTemplateSettings(template, params), node),
   }
 }
 
-function getEffectiveTemplateSettings(template, params) {
+function getEffectiveTemplateSettings(template, params, node) {
   if (
     template &&
     typeof template === 'object' &&
@@ -167,7 +173,7 @@ function getEffectiveTemplateSettings(template, params) {
   ) {
     return { ...template.__resolved_settings }
   }
-  return normalizeTemplateSettings(template, buildTemplateSettings(template, params))
+  return normalizeTemplateSettings(template, buildTemplateSettings(template, params), node)
 }
 
 function applyTlsForSingbox(template, settings) {
@@ -565,9 +571,10 @@ function buildConfigFile(engine, templates, params) {
   }
 }
 
-export function buildNodeConfigPreview({ templates, params = {}, engine }) {
+export function buildNodeConfigPreview({ templates, params = {}, engine, node }) {
   const selectedEngine = normalizeEngine(engine || templates?.[0]?.engine)
-  const configFile = buildConfigFile(selectedEngine, templates || [], params || {})
+  const decoratedTemplates = (templates || []).map((t) => decorateTemplateWithResolvedSettings(t, params, node))
+  const configFile = buildConfigFile(selectedEngine, decoratedTemplates, params || {})
   return {
     engine: selectedEngine,
     config_name: configFile.path,
@@ -601,7 +608,7 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
   const baseGroups = buildTemplateGroups({ templates, templateGroups, engine })
   const groups = baseGroups.map((group) => ({
     engine: group.engine,
-    templates: group.templates.map((template) => decorateTemplateWithResolvedSettings(template, params)),
+    templates: group.templates.map((template) => decorateTemplateWithResolvedSettings(template, params, node)),
   }))
   const allTemplates = groups.flatMap((group) => group.templates)
   const templateNames = allTemplates.map((item) => item.name)

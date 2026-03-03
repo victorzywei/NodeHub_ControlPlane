@@ -62,7 +62,7 @@ const builtinRows = computed(() => filteredTemplates.value.filter((item) => item
 const customRows = computed(() => filteredTemplates.value.filter((item) => item.kind === 'custom'))
 
 const presetParamFields = computed<EditorParamField[]>(() => {
-  return getPresetTemplateParamFields(form.protocol, form.transport, form.tls_mode)
+  return getPresetTemplateParamFields(form.protocol, form.transport, form.tls_mode, form.engine)
 })
 
 const presetParamKeySet = computed(() => new Set(presetParamFields.value.map((item) => item.key)))
@@ -103,7 +103,7 @@ function syncDefaultsForm(source: Record<string, unknown>): void {
 
     if (!value) {
       if (field.secret) {
-        value = generateSecretValue(field.key)
+        value = generateSecretValue(field.key, { ...next, ...source, protocol: form.protocol } as Record<string, string>)
       } else if (field.defaultValue !== undefined) {
         value = String(field.defaultValue)
       } else if (field.type === 'select' && field.options && field.options.length > 0) {
@@ -215,7 +215,7 @@ function removeCustomParam(key: string): void {
 }
 
 function regenSecret(key: string): void {
-  defaultsForm[key] = generateSecretValue(key)
+  defaultsForm[key] = generateSecretValue(key, { ...defaultsForm, protocol: form.protocol } as Record<string, string>)
 }
 
 async function saveTemplate(): Promise<void> {
@@ -227,10 +227,7 @@ async function saveTemplate(): Promise<void> {
       return
     }
 
-    if (form.node_type !== 'edge' && form.engine === 'xray' && form.protocol === 'hysteria2') {
-      toastStore.push('xray 暂不支持 hysteria2 协议', 'warning')
-      return
-    }
+
 
     for (const field of presetParamFields.value) {
       const val = defaults[field.key]
@@ -287,15 +284,16 @@ async function removeTemplate(): Promise<void> {
 }
 
 watch(
-  () => [form.protocol, form.transport, form.tls_mode],
+  () => [form.protocol, form.transport, form.tls_mode, form.engine],
   (newValues, oldValues) => {
     if (!editorOpen.value || editorMode.value !== 'create') return
 
     const oldProto = oldValues?.[0] || ''
     const oldTrans = oldValues?.[1] || ''
     const oldTls = oldValues?.[2] || ''
+    const oldEngine = oldValues?.[3] || ''
 
-    const oldPresetKeys = new Set(getPresetTemplateParamFields(oldProto, oldTrans, oldTls).map((field) => field.key))
+    const oldPresetKeys = new Set(getPresetTemplateParamFields(oldProto, oldTrans, oldTls, oldEngine).map((field) => field.key))
 
     const nextSource: Record<string, unknown> = {}
     Object.keys(defaultsForm).forEach((key) => {
@@ -306,6 +304,28 @@ watch(
 
     syncDefaultsForm(nextSource)
   },
+)
+
+watch(
+  () => defaultsForm.method,
+  (newMethod, oldMethod) => {
+    if (editorOpen.value && form.protocol === 'shadowsocks2022' && newMethod && oldMethod && newMethod !== oldMethod) {
+      if (defaultsForm.password) {
+        regenSecret('password')
+      }
+    }
+  }
+)
+
+watch(
+  () => defaultsForm.server_name,
+  (newServerName) => {
+    if (editorOpen.value && form.tls_mode === 'reality' && newServerName) {
+      if (form.engine === 'xray' && (!defaultsForm.dest || defaultsForm.dest.includes(newServerName))) {
+        defaultsForm.dest = `${newServerName}:443`
+      }
+    }
+  }
 )
 
 onMounted(loadData)

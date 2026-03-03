@@ -50,6 +50,7 @@ export async function onRequestPost({ request, env, params }) {
       templates,
       params: {},
       engine,
+      node,
     })
 
     return {
