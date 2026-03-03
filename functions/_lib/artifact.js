@@ -374,7 +374,7 @@ function buildXrayStreamSettings(template, settings) {
     stream.security = 'reality'
     stream.realitySettings = {
       show: false,
-      dest: `${serverName}:443`,
+      dest: text(settings.dest || `${serverName}:443`),
       xver: 0,
       serverNames: [serverName],
       privateKey: requireField('reality_private_key', settings.reality_private_key || settings.private_key),

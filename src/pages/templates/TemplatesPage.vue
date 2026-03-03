@@ -128,9 +128,13 @@ function buildDefaultsPayload(): Record<string, unknown> {
 
   Object.entries(defaultsForm).forEach(([key, rawValue]) => {
     const value = String(rawValue ?? '')
-    if (value.trim() === '') return
-
     const field = fieldMap.get(key)
+
+    if (value.trim() === '') {
+      if (field?.optional) result[key] = ''
+      return
+    }
+
     if (field?.valueType === 'number') {
       const num = Number(value)
       result[key] = Number.isFinite(num) ? num : value
@@ -232,8 +236,10 @@ async function saveTemplate(): Promise<void> {
     for (const field of presetParamFields.value) {
       const val = defaults[field.key]
       if (val === undefined || val === '') {
-        toastStore.push(`参数 ${field.label || field.key} 未配置`, 'warning')
-        return
+        if (!field.optional) {
+          toastStore.push(`参数 ${field.label || field.key} 未配置`, 'warning')
+          return
+        }
       }
 
       if (field.key === 'port') {
@@ -320,9 +326,13 @@ watch(
 watch(
   () => defaultsForm.server_name,
   (newServerName) => {
-    if (editorOpen.value && form.tls_mode === 'reality' && newServerName) {
-      if (form.engine === 'xray' && (!defaultsForm.dest || defaultsForm.dest.includes(newServerName))) {
-        defaultsForm.dest = `${newServerName}:443`
+    if (editorOpen.value && form.tls_mode === 'reality' && newServerName !== undefined) {
+      if (form.engine === 'xray') {
+        if (!newServerName) {
+          defaultsForm.dest = ''
+        } else if (!defaultsForm.dest || defaultsForm.dest.includes(newServerName) || defaultsForm.dest === ':443') {
+          defaultsForm.dest = `${newServerName}:443`
+        }
       }
     }
   }

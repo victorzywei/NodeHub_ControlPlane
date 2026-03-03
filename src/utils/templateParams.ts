@@ -16,6 +16,7 @@ export interface TemplateParamField {
   defaultValue?: string | number
   secret?: boolean
   custom?: boolean
+  optional?: boolean
 }
 
 function randomHex(bytes: number): string {
@@ -70,7 +71,7 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
 
   if (transport === 'ws') {
     fields.push({ key: 'path', label: 'WS Path', type: 'text', valueType: 'string', defaultValue: '/ws' })
-    fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '' })
+    fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
   } else if (transport === 'grpc') {
     fields.push({ key: 'service_name', label: 'gRPC Service Name', type: 'text', valueType: 'string', defaultValue: 'grpc-service' })
   }
@@ -88,19 +89,20 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
       { value: 'gateway.icloud.com', label: 'gateway.icloud.com' },
       { value: 'itunes.apple.com', label: 'itunes.apple.com' },
       { value: 'www.dbs.com.sg', label: 'www.dbs.com.sg' },
-      { value: 'www.hsbc.com.hk', label: 'www.hsbc.com.hk' }
+      { value: 'www.hsbc.com.hk', label: 'www.hsbc.com.hk' },
+      { value: '', label: '自动跟随节点主域名' }
     ]
-    const randomSni = REALITY_SNI_OPTIONS[Math.floor(Math.random() * REALITY_SNI_OPTIONS.length)].value
+    const randomSni = REALITY_SNI_OPTIONS[Math.floor(Math.random() * (REALITY_SNI_OPTIONS.length - 1))].value
 
-    fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'select', valueType: 'string', options: REALITY_SNI_OPTIONS, defaultValue: randomSni })
+    fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'select', valueType: 'string', options: REALITY_SNI_OPTIONS, defaultValue: randomSni, optional: true })
     fields.push({ key: 'reality_private_key', label: 'Reality Private Key', type: 'password', valueType: 'string', secret: true })
     fields.push({ key: 'reality_short_id', label: 'Reality Short ID', type: 'password', valueType: 'string', secret: true })
 
     if (engine === 'xray') {
-      fields.push({ key: 'dest', label: 'Reality Dest', type: 'text', valueType: 'string', placeholder: 'example.com:443', defaultValue: `${randomSni}:443` })
+      fields.push({ key: 'dest', label: 'Reality Dest', type: 'text', valueType: 'string', placeholder: 'example.com:443', defaultValue: `${randomSni}:443`, optional: true })
     }
   } else if (tlsMode === 'tls') {
-    fields.push({ key: 'sni', label: 'SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '' })
+    fields.push({ key: 'sni', label: 'SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '', optional: true })
   }
 
   return fields
