@@ -151,6 +151,51 @@ describe('format utilities', () => {
     expect(config.inbounds?.[0]?.tls?.reality?.handshake?.server_port).toBe(443)
   })
 
+  it('renders sing-box xhttp transport with reality', async () => {
+    const template = {
+      id: 'tpl_vless_reality_xhttp',
+      name: 'VLESS + Reality + XHTTP',
+      engine: 'sing-box',
+      protocol: 'vless',
+      transport: 'xhttp',
+      tls_mode: 'reality',
+      defaults: {
+        port: 49443,
+        path: '/',
+        host: 'gateway.icloud.com',
+        server_name: 'gateway.icloud.com',
+        reality_private_key: 'test-private-key',
+        reality_short_id: '60ecf95c05576710',
+      },
+    }
+
+    const artifact = await buildNodeArtifactBundle({
+      node: { id: 'node-2' },
+      rev: 3,
+      operationId: 'op-3',
+      templates: [template],
+      templateGroups: [{ engine: 'sing-box', templates: [template] }],
+      params: {},
+      createdAt: '2026-03-02T00:00:00.000Z',
+      engine: 'sing-box',
+    })
+
+    const files = parseBundleFiles(artifact.bundle)
+    const config = JSON.parse(files['sing-box.json']) as {
+      inbounds?: Array<{
+        transport?: {
+          type?: string
+          path?: string
+          host?: string
+        }
+      }>
+    }
+
+    expect(config.inbounds?.[0]?.transport?.type).toBe('xhttp')
+    expect(config.inbounds?.[0]?.transport?.path).toBe('/')
+    expect(config.inbounds?.[0]?.transport?.host).toBe('gateway.icloud.com')
+  })
+
   it('includes reality public key field in preset params', () => {
     const fields = getPresetTemplateParamFields('vless', 'tcp', 'reality', 'xray')
     const keys = fields.map((item) => item.key)

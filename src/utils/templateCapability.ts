@@ -41,12 +41,11 @@ export function supportsTemplateCombination(engine: string, protocol: string, tr
   const tls = normalize(tlsMode)
 
   if (!supportsProtocolTls(p, tls) || !supportsProtocolTransport(p, t)) return false
-  if (e !== 'xray' && (t === 'mkcp' || t === 'xhttp')) return false
+  if (e !== 'xray' && t === 'mkcp') return false
 
   if (tls === 'reality') {
     if (p !== 'vless') return false
-    if (e === 'xray') return t === 'tcp' || t === 'grpc' || t === 'xhttp'
-    return t === 'tcp' || t === 'grpc'
+    return t === 'tcp' || t === 'grpc' || t === 'xhttp'
   }
 
   return true

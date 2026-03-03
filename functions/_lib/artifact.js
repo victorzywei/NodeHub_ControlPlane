@@ -224,7 +224,7 @@ function applyTransportForSingbox(template, settings) {
   const transport = text(template.transport).toLowerCase()
   if (!transport || transport === 'tcp' || transport === 'udp') return undefined
 
-  if (transport === 'mkcp' || transport === 'xhttp') {
+  if (transport === 'mkcp') {
     throw new Error(`sing-box does not support transport: ${transport}`)
   }
 
@@ -248,6 +248,14 @@ function applyTransportForSingbox(template, settings) {
       type: 'httpupgrade',
       path: text(settings.path || '/'),
       host: text(settings.host),
+    }
+  }
+
+  if (transport === 'xhttp') {
+    return {
+      type: 'xhttp',
+      path: text(settings.path || '/'),
+      host: text(settings.host) || undefined,
     }
   }
 

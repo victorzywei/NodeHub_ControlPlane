@@ -316,6 +316,8 @@ function applyTransportSingbox(base, ob, s) {
         base.transport = { type: 'grpc', service_name: s.service_name || 'grpc' }
     } else if (ob.transport === 'httpupgrade') {
         base.transport = { type: 'httpupgrade', host: s.host || '', path: s.path || '/' }
+    } else if (ob.transport === 'xhttp') {
+        base.transport = { type: 'xhttp', host: s.host || '', path: s.path || '/' }
     }
 }
 
