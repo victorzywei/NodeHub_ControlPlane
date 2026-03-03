@@ -53,9 +53,9 @@ const PROTOCOL_TLS_SUPPORT: Record<string, string[]> = {
 }
 
 const PROTOCOL_TRANSPORT_SUPPORT: Record<string, string[]> = {
-  vless: ['tcp', 'ws', 'grpc'],
-  trojan: ['tcp', 'ws', 'grpc'],
-  vmess: ['tcp', 'ws', 'grpc'],
+  vless: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
+  trojan: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
+  vmess: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
   hysteria2: ['udp'],
   shadowsocks2022: ['tcp', 'udp'],
 }
@@ -76,10 +76,17 @@ function supportsProtocolTransport(protocol: string, transport: string): boolean
 
 function supportsComboTransport(engine: string, protocol: string, tlsMode: string, transport: string): boolean {
   if (!supportsProtocolTransport(protocol, transport)) return false
+
+  if (engine !== 'xray' && (transport === 'mkcp' || transport === 'xhttp')) {
+    return false
+  }
+
   if (tlsMode === 'reality') {
     if (protocol !== 'vless') return false
-    if (transport !== 'tcp' && transport !== 'grpc') return false
-    if (engine === 'xray' && transport === 'tcp') return true
+    if (engine === 'xray') {
+      return transport === 'tcp' || transport === 'grpc' || transport === 'xhttp'
+    }
+    return transport === 'tcp' || transport === 'grpc'
   }
   return true
 }

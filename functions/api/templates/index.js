@@ -6,6 +6,7 @@ import {
   engineSupportsProtocol,
   listBuiltinTemplates,
   normalizeCustomTemplate,
+  supportsTemplateCombination,
   toDefaults,
 } from '../../_lib/template-records.js'
 import { KEY, createId, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'
@@ -53,6 +54,9 @@ export async function onRequestPost({ request, env }) {
   }
   if (!engineSupportsProtocol(engine, protocol)) {
     return fail('VALIDATION', 'selected engine does not support the protocol', 400)
+  }
+  if (!supportsTemplateCombination(engine, protocol, transport, tlsMode)) {
+    return fail('VALIDATION', 'selected protocol/tls_mode/transport combination is not supported', 400)
   }
 
   const id = createId('tpl')

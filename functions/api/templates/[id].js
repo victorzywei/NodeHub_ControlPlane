@@ -6,6 +6,7 @@ import {
   engineSupportsProtocol,
   findBuiltinTemplate,
   getMergedBuiltinTemplate,
+  supportsTemplateCombination,
   toDefaults,
 } from '../../_lib/template-records.js'
 import { KEY, indexRemove, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
@@ -17,6 +18,16 @@ function resolvePatchEngine(value, fallback) {
   const valid = TEMPLATE_REGISTRY.engines.some((item) => item.key === engine)
   if (!valid) throw new Error('Unknown engine')
   return engine
+}
+
+function resolvePatchTransport(value, fallback) {
+  if (value === undefined) return String(fallback || '').trim()
+  return String(value || '').trim()
+}
+
+function resolvePatchTlsMode(value, fallback) {
+  if (value === undefined) return String(fallback || '').trim()
+  return String(value || '').trim()
 }
 
 export async function onRequestGet({ request, env, params }) {
@@ -55,6 +66,11 @@ export async function onRequestPatch({ request, env, params }) {
     }
     if (!engineSupportsProtocol(nextEngine, builtin.protocol)) {
       return fail('VALIDATION', 'selected engine does not support the protocol', 400)
+    }
+    const nextTransport = resolvePatchTransport(body.transport, builtin.transport)
+    const nextTlsMode = resolvePatchTlsMode(body.tls_mode, builtin.tls_mode)
+    if (!supportsTemplateCombination(nextEngine, builtin.protocol, nextTransport, nextTlsMode)) {
+      return fail('VALIDATION', 'selected protocol/tls_mode/transport combination is not supported', 400)
     }
     const nextNodeTypes =
       body.node_types !== undefined
@@ -96,6 +112,11 @@ export async function onRequestPatch({ request, env, params }) {
   }
   if (!engineSupportsProtocol(current.engine, current.protocol)) {
     return fail('VALIDATION', 'selected engine does not support the protocol', 400)
+  }
+  const nextTransport = resolvePatchTransport(body.transport, current.transport)
+  const nextTlsMode = resolvePatchTlsMode(body.tls_mode, current.tls_mode)
+  if (!supportsTemplateCombination(current.engine, current.protocol, nextTransport, nextTlsMode)) {
+    return fail('VALIDATION', 'selected protocol/tls_mode/transport combination is not supported', 400)
   }
   if (body.node_types !== undefined) current.node_types = normalizeTemplateNodeTypes(body.node_types)
   current.node_types = normalizeTemplateNodeTypes(current.node_types)

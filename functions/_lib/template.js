@@ -86,6 +86,15 @@ export function applyTemplateAutoDefaults({ protocol, transport, tlsMode, defaul
     ensureValue(next, 'host', () => '')
   }
 
+  if (t === 'httpupgrade' || t === 'xhttp' || t === 'h2') {
+    ensureValue(next, 'path', () => '/')
+    ensureValue(next, 'host', () => '')
+  }
+
+  if (t === 'grpc') {
+    ensureValue(next, 'service_name', () => 'grpc')
+  }
+
   if (p === 'vless' && tls === 'reality') {
     ensureValue(next, 'flow', () => 'xtls-rprx-vision')
     ensureValue(next, 'server_name', () => '')

@@ -21,7 +21,7 @@ export function renderV2ray(outbounds) {
 
         if (protocol === 'vless') {
             const params = new URLSearchParams()
-            params.set('type', ob.transport || 'tcp')
+            params.set('type', ob.transport === 'mkcp' ? 'kcp' : (ob.transport || 'tcp'))
             params.set('security', ob.tls_mode || 'none')
             params.set('encryption', 'none')
 
@@ -31,12 +31,11 @@ export function renderV2ray(outbounds) {
             } else if (ob.transport === 'grpc') {
                 params.set('serviceName', s.service_name || 'grpc')
                 params.set('mode', s.multi_mode ? 'multi' : 'gun')
-            } else if (ob.transport === 'h2') {
+            } else if (ob.transport === 'h2' || ob.transport === 'httpupgrade' || ob.transport === 'xhttp') {
                 params.set('host', s.host || '')
                 params.set('path', s.path || '/')
-            } else if (ob.transport === 'httpupgrade') {
-                params.set('host', s.host || '')
-                params.set('path', s.path || '/')
+            } else if (ob.transport === 'mkcp') {
+                if (s.seed) params.set('seed', s.seed)
             }
 
             if (hasTls) {
@@ -55,13 +54,18 @@ export function renderV2ray(outbounds) {
 
         if (protocol === 'trojan') {
             const params = new URLSearchParams()
-            params.set('type', ob.transport || 'tcp')
+            params.set('type', ob.transport === 'mkcp' ? 'kcp' : (ob.transport || 'tcp'))
             params.set('security', hasTls ? 'tls' : 'none')
             if (ob.transport === 'ws') {
                 params.set('host', s.host || '')
                 params.set('path', s.path || '/trojan-ws')
             } else if (ob.transport === 'grpc') {
                 params.set('serviceName', s.service_name || 'grpc')
+            } else if (ob.transport === 'httpupgrade' || ob.transport === 'xhttp' || ob.transport === 'h2') {
+                params.set('host', s.host || '')
+                params.set('path', s.path || '/')
+            } else if (ob.transport === 'mkcp') {
+                if (s.seed) params.set('seed', s.seed)
             }
             if (hasTls) {
                 params.set('sni', s.sni || s.server_name || s.host || '')
@@ -77,7 +81,7 @@ export function renderV2ray(outbounds) {
                 add: addr, port: parseInt(port),
                 id: pickFirst(s, ['uuid', 'user_id', 'id']), aid: s.alter_id || 0,
                 scy: s.encryption || 'auto',
-                net: ob.transport || 'ws',
+                net: ob.transport === 'mkcp' ? 'kcp' : (ob.transport || 'ws'),
                 type: 'none',
                 host: s.host || '', path: s.path || '/',
                 tls: hasTls ? 'tls' : '',
@@ -130,7 +134,7 @@ export function renderClash(subName, outbounds) {
                 ...base, type: 'vless', uuid: pickFirst(s, ['uuid', 'user_id', 'id']),
                 tls: hasTls, 'skip-cert-verify': s.allow_insecure || false,
                 servername: s.sni || s.server_name || s.host || '',
-                network: ob.transport || 'ws',
+                network: ob.transport === 'mkcp' ? 'kcp' : (ob.transport || 'ws'),
                 flow: s.flow || undefined,
                 'client-fingerprint': s.fingerprint || 'chrome',
                 'ws-opts': ob.transport === 'ws' ? { path: s.path || '/', headers: { Host: s.host || '' } } : undefined,
@@ -156,7 +160,7 @@ export function renderClash(subName, outbounds) {
                 alterId: s.alter_id || 0, cipher: s.encryption || 'auto',
                 tls: hasTls, 'skip-cert-verify': s.allow_insecure || false,
                 servername: s.sni || s.server_name || s.host || '',
-                network: ob.transport || 'ws',
+                network: ob.transport === 'mkcp' ? 'kcp' : (ob.transport || 'ws'),
                 'ws-opts': ob.transport === 'ws' ? { path: s.path || '/', headers: { Host: s.host || '' } } : undefined,
                 'grpc-opts': ob.transport === 'grpc' ? { 'grpc-service-name': s.service_name || 'grpc' } : undefined,
             }

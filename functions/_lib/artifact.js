@@ -123,7 +123,7 @@ function normalizeTemplateSettings(template, sourceSettings, node) {
     settings.password = user.password
   }
 
-  if (transport === 'ws' || transport === 'h2' || transport === 'httpupgrade') {
+  if (transport === 'ws' || transport === 'h2' || transport === 'httpupgrade' || transport === 'xhttp') {
     if (!text(settings.path)) settings.path = '/'
     if (settings.host === undefined || settings.host === null || text(settings.host) === '') settings.host = fallbackDomain
   } else if (transport === 'grpc') {
@@ -207,6 +207,10 @@ function applyTransportForSingbox(template, settings) {
   const transport = text(template.transport).toLowerCase()
   if (!transport || transport === 'tcp' || transport === 'udp') return undefined
 
+  if (transport === 'mkcp' || transport === 'xhttp') {
+    throw new Error(`sing-box does not support transport: ${transport}`)
+  }
+
   if (transport === 'ws') {
     return {
       type: 'ws',
@@ -238,7 +242,7 @@ function applyTransportForSingbox(template, settings) {
     }
   }
 
-  return undefined
+  throw new Error(`unsupported transport for sing-box: ${transport}`)
 }
 
 function buildSingboxInbound(template, params, idx) {
@@ -353,6 +357,13 @@ function buildXrayStreamSettings(template, settings) {
     throw new Error(`xray reality does not support transport: ${transport}`)
   }
 
+  if (transport === 'mkcp') {
+    transport = 'kcp'
+  }
+  if (transport === 'h2') {
+    transport = 'http'
+  }
+
   const stream = { network: transport }
 
   if (transport === 'ws') {
@@ -367,6 +378,20 @@ function buildXrayStreamSettings(template, settings) {
   } else if (transport === 'httpupgrade') {
     stream.httpupgradeSettings = {
       host: text(settings.host || ''),
+      path: text(settings.path || '/'),
+    }
+  } else if (transport === 'xhttp') {
+    stream.xhttpSettings = {
+      path: text(settings.path || '/'),
+      host: text(settings.host || '') ? [text(settings.host || '')] : undefined,
+    }
+  } else if (transport === 'kcp') {
+    stream.kcpSettings = {
+      seed: text(settings.seed || '') || undefined,
+    }
+  } else if (transport === 'http') {
+    stream.httpSettings = {
+      host: text(settings.host || '') ? [text(settings.host || '')] : undefined,
       path: text(settings.path || '/'),
     }
   } else if (transport === 'hysteria') {

@@ -80,8 +80,13 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
   if (transport === 'ws') {
     fields.push({ key: 'path', label: 'WS Path', type: 'text', valueType: 'string', defaultValue: '/ws' })
     fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
+  } else if (transport === 'httpupgrade' || transport === 'xhttp' || transport === 'h2') {
+    fields.push({ key: 'path', label: 'Path', type: 'text', valueType: 'string', defaultValue: '/' })
+    fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
   } else if (transport === 'grpc') {
     fields.push({ key: 'service_name', label: 'gRPC Service Name', type: 'text', valueType: 'string', defaultValue: 'grpc-service' })
+  } else if (transport === 'mkcp') {
+    fields.push({ key: 'seed', label: 'mKCP Seed', type: 'text', valueType: 'string', defaultValue: '', optional: true })
   }
 
   if (protocol === 'vless' && transport === 'tcp' && (tlsMode === 'reality' || tlsMode === 'tls')) {

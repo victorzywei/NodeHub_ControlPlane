@@ -26,6 +26,42 @@ function normalizePort(value, fallback = 443) {
   return port
 }
 
+function supportsTemplateCombinationForApply(engine, protocol, transport, tlsMode) {
+  const e = normalizeTemplateEngine(engine)
+  const p = String(protocol || '').trim().toLowerCase()
+  const t = String(transport || '').trim().toLowerCase()
+  const tls = String(tlsMode || '').trim().toLowerCase()
+
+  const tlsSupport = {
+    vless: new Set(['none', 'tls', 'reality']),
+    trojan: new Set(['tls']),
+    vmess: new Set(['none', 'tls']),
+    hysteria2: new Set(['tls']),
+    shadowsocks2022: new Set(['none']),
+  }
+
+  const transportSupport = {
+    vless: new Set(['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2']),
+    trojan: new Set(['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2']),
+    vmess: new Set(['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2']),
+    hysteria2: new Set(['udp']),
+    shadowsocks2022: new Set(['tcp', 'udp']),
+  }
+
+  if (!tlsSupport[p]?.has(tls)) return false
+  if (!transportSupport[p]?.has(t)) return false
+
+  if (e !== 'xray' && (t === 'mkcp' || t === 'xhttp')) return false
+
+  if (tls === 'reality') {
+    if (p !== 'vless') return false
+    if (e === 'xray') return t === 'tcp' || t === 'grpc' || t === 'xhttp'
+    return t === 'tcp' || t === 'grpc'
+  }
+
+  return true
+}
+
 function ensureUniqueTemplatePorts(templates) {
   const byPort = new Map()
   for (const template of templates) {
@@ -112,6 +148,11 @@ export async function resolveTemplatesForPreview(kv, nodeType, templateIds) {
     }
     if (!normalizeTemplateNodeTypes(template.node_types).includes(nodeType)) {
       throw new Error(`template ${template.name || id} does not support node type ${nodeType}`)
+    }
+    if (!supportsTemplateCombinationForApply(template.engine, template.protocol, template.transport, template.tls_mode)) {
+      throw new Error(
+        `template ${template.name || id} has unsupported protocol/tls/transport combination: ${template.protocol}/${template.tls_mode}/${template.transport}`,
+      )
     }
     templates.push(template)
   }

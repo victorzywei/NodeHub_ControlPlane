@@ -107,9 +107,13 @@ export const TEMPLATE_REGISTRY = {
     { key: 'vmess', label: 'VMess' },
   ],
   transports: [
+    { key: 'tcp', label: 'TCP (RAW)' },
+    { key: 'mkcp', label: 'mKCP' },
     { key: 'ws', label: 'WebSocket' },
     { key: 'grpc', label: 'gRPC' },
-    { key: 'tcp', label: 'TCP' },
+    { key: 'httpupgrade', label: 'HTTPUpgrade' },
+    { key: 'xhttp', label: 'XHTTP' },
+    { key: 'h2', label: 'HTTP/2' },
     { key: 'udp', label: 'UDP' },
   ],
   tls_modes: [
