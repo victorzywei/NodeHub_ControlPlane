@@ -131,3 +131,23 @@ export interface SystemStatus {
   uptime_hint: string
   now: string
 }
+
+export interface TemplateRefCleanupDetail {
+  node_id: string
+  node_name: string
+  before_count: number
+  after_count: number
+  removed: Array<{
+    template_id: string
+    reason: 'missing' | 'node_type_mismatch' | 'unsupported_combination' | string
+  }>
+}
+
+export interface TemplateRefCleanupResult {
+  dry_run: boolean
+  processed_nodes: number
+  changed_nodes: number
+  removed_template_refs: number
+  updated_nodes: number
+  details: TemplateRefCleanupDetail[]
+}

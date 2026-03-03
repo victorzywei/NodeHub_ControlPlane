@@ -2,11 +2,11 @@ import { requireAdmin } from '../../_lib/auth.js'
 import { TEMPLATE_REGISTRY } from '../../_lib/constants.js'
 import { normalizeTemplateNodeTypes } from '../../_lib/node-apply.js'
 import { applyTemplateAutoDefaults } from '../../_lib/template.js'
+import { supportsTemplateCombination } from '../../_lib/template-capability.js'
 import {
   engineSupportsProtocol,
   listBuiltinTemplates,
   normalizeCustomTemplate,
-  supportsTemplateCombination,
   toDefaults,
 } from '../../_lib/template-records.js'
 import { KEY, createId, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'

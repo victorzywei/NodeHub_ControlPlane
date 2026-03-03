@@ -86,7 +86,7 @@ export function applyTemplateAutoDefaults({ protocol, transport, tlsMode, defaul
     ensureValue(next, 'host', () => '')
   }
 
-  if (t === 'httpupgrade' || t === 'xhttp' || t === 'h2') {
+  if (t === 'httpupgrade' || t === 'xhttp') {
     ensureValue(next, 'path', () => '/')
     ensureValue(next, 'host', () => '')
   }

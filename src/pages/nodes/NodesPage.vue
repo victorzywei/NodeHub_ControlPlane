@@ -7,6 +7,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { createNode, deleteNode, getNode, listNodes, nodeInstallCommand, previewNodePublish, publishNodeTemplates, updateNode } from '@/api/services/nodes'
 import { listTemplates } from '@/api/services/templates'
 import type { NodeKind, NodePublishPreview, NodeRecord, TemplateRecord } from '@/types/domain'
+import { supportsTemplateCombination } from '@/utils/templateCapability'
 import { formatRelative } from '@/utils/format'
 import { useToastStore } from '@/stores/toast'
 
@@ -83,52 +84,6 @@ const publishAvailableTemplates = computed(() => {
   if (!node) return []
   return templates.value.filter((item) => item.node_types.includes(node.node_type) && isTemplatePublishable(item))
 })
-
-const PROTOCOL_TLS_SUPPORT: Record<string, string[]> = {
-  vless: ['none', 'tls', 'reality'],
-  trojan: ['tls'],
-  vmess: ['none', 'tls'],
-  hysteria2: ['tls'],
-  shadowsocks2022: ['none'],
-}
-
-const PROTOCOL_TRANSPORT_SUPPORT: Record<string, string[]> = {
-  vless: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  trojan: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  vmess: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  hysteria2: ['udp'],
-  shadowsocks2022: ['tcp', 'udp'],
-}
-
-function supportsProtocolTls(protocol: string, tlsMode: string): boolean {
-  const allowed = PROTOCOL_TLS_SUPPORT[String(protocol || '').trim().toLowerCase()]
-  if (!allowed) return false
-  return allowed.includes(String(tlsMode || '').trim().toLowerCase())
-}
-
-function supportsProtocolTransport(protocol: string, transport: string): boolean {
-  const allowed = PROTOCOL_TRANSPORT_SUPPORT[String(protocol || '').trim().toLowerCase()]
-  if (!allowed) return false
-  return allowed.includes(String(transport || '').trim().toLowerCase())
-}
-
-function supportsTemplateCombination(engine: string, protocol: string, transport: string, tlsMode: string): boolean {
-  const e = String(engine || '').trim().toLowerCase()
-  const p = String(protocol || '').trim().toLowerCase()
-  const t = String(transport || '').trim().toLowerCase()
-  const tls = String(tlsMode || '').trim().toLowerCase()
-
-  if (!supportsProtocolTls(p, tls) || !supportsProtocolTransport(p, t)) return false
-  if (e !== 'xray' && (t === 'mkcp' || t === 'xhttp')) return false
-
-  if (tls === 'reality') {
-    if (p !== 'vless') return false
-    if (e === 'xray') return t === 'tcp' || t === 'grpc' || t === 'xhttp'
-    return t === 'tcp' || t === 'grpc'
-  }
-
-  return true
-}
 
 function isTemplatePublishable(template: TemplateRecord): boolean {
   return supportsTemplateCombination(template.engine, template.protocol, template.transport, template.tls_mode)

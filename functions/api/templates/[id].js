@@ -1,12 +1,12 @@
 import { requireAdmin } from '../../_lib/auth.js'
 import { TEMPLATE_REGISTRY } from '../../_lib/constants.js'
 import { normalizeTemplateEngine, normalizeTemplateNodeTypes } from '../../_lib/node-apply.js'
+import { supportsTemplateCombination } from '../../_lib/template-capability.js'
 import { applyTemplateAutoDefaults } from '../../_lib/template.js'
 import {
   engineSupportsProtocol,
   findBuiltinTemplate,
   getMergedBuiltinTemplate,
-  supportsTemplateCombination,
   toDefaults,
 } from '../../_lib/template-records.js'
 import { KEY, indexRemove, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'

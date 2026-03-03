@@ -113,7 +113,6 @@ export const TEMPLATE_REGISTRY = {
     { key: 'grpc', label: 'gRPC' },
     { key: 'httpupgrade', label: 'HTTPUpgrade' },
     { key: 'xhttp', label: 'XHTTP' },
-    { key: 'h2', label: 'HTTP/2' },
     { key: 'udp', label: 'UDP' },
   ],
   tls_modes: [

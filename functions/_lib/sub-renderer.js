@@ -31,7 +31,7 @@ export function renderV2ray(outbounds) {
             } else if (ob.transport === 'grpc') {
                 params.set('serviceName', s.service_name || 'grpc')
                 params.set('mode', s.multi_mode ? 'multi' : 'gun')
-            } else if (ob.transport === 'h2' || ob.transport === 'httpupgrade' || ob.transport === 'xhttp') {
+            } else if (ob.transport === 'httpupgrade' || ob.transport === 'xhttp') {
                 params.set('host', s.host || '')
                 params.set('path', s.path || '/')
             } else if (ob.transport === 'mkcp') {
@@ -61,7 +61,7 @@ export function renderV2ray(outbounds) {
                 params.set('path', s.path || '/trojan-ws')
             } else if (ob.transport === 'grpc') {
                 params.set('serviceName', s.service_name || 'grpc')
-            } else if (ob.transport === 'httpupgrade' || ob.transport === 'xhttp' || ob.transport === 'h2') {
+            } else if (ob.transport === 'httpupgrade' || ob.transport === 'xhttp') {
                 params.set('host', s.host || '')
                 params.set('path', s.path || '/')
             } else if (ob.transport === 'mkcp') {
@@ -314,8 +314,6 @@ function applyTransportSingbox(base, ob, s) {
         }
     } else if (ob.transport === 'grpc') {
         base.transport = { type: 'grpc', service_name: s.service_name || 'grpc' }
-    } else if (ob.transport === 'h2') {
-        base.transport = { type: 'http', host: [s.host || ''], path: s.path || '/' }
     } else if (ob.transport === 'httpupgrade') {
         base.transport = { type: 'httpupgrade', host: s.host || '', path: s.path || '/' }
     }

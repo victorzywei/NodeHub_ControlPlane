@@ -123,7 +123,7 @@ function normalizeTemplateSettings(template, sourceSettings, node) {
     settings.password = user.password
   }
 
-  if (transport === 'ws' || transport === 'h2' || transport === 'httpupgrade' || transport === 'xhttp') {
+  if (transport === 'ws' || transport === 'httpupgrade' || transport === 'xhttp') {
     if (!text(settings.path)) settings.path = '/'
     if (settings.host === undefined || settings.host === null || text(settings.host) === '') settings.host = fallbackDomain
   } else if (transport === 'grpc') {
@@ -223,14 +223,6 @@ function applyTransportForSingbox(template, settings) {
     return {
       type: 'grpc',
       service_name: text(settings.service_name || 'grpc'),
-    }
-  }
-
-  if (transport === 'h2') {
-    return {
-      type: 'http',
-      path: text(settings.path || '/'),
-      host: text(settings.host) ? [text(settings.host)] : undefined,
     }
   }
 
@@ -360,10 +352,6 @@ function buildXrayStreamSettings(template, settings) {
   if (transport === 'mkcp') {
     transport = 'kcp'
   }
-  if (transport === 'h2') {
-    transport = 'http'
-  }
-
   const stream = { network: transport }
 
   if (transport === 'ws') {
@@ -388,11 +376,6 @@ function buildXrayStreamSettings(template, settings) {
   } else if (transport === 'kcp') {
     stream.kcpSettings = {
       seed: text(settings.seed || '') || undefined,
-    }
-  } else if (transport === 'http') {
-    stream.httpSettings = {
-      host: text(settings.host || '') ? [text(settings.host || '')] : undefined,
-      path: text(settings.path || '/'),
     }
   } else if (transport === 'hysteria') {
     stream.hysteriaSettings = {

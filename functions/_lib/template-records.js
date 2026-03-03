@@ -12,45 +12,6 @@ export function engineSupportsProtocol(engine, protocol) {
   return true
 }
 
-const PROTOCOL_TLS_SUPPORT = {
-  vless: ['none', 'tls', 'reality'],
-  trojan: ['tls'],
-  vmess: ['none', 'tls'],
-  hysteria2: ['tls'],
-  shadowsocks2022: ['none'],
-}
-
-const PROTOCOL_TRANSPORT_SUPPORT = {
-  vless: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  trojan: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  vmess: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  hysteria2: ['udp'],
-  shadowsocks2022: ['tcp', 'udp'],
-}
-
-export function supportsTemplateCombination(engine, protocol, transport, tlsMode) {
-  const p = String(protocol || '').trim().toLowerCase()
-  const t = String(transport || '').trim().toLowerCase()
-  const tls = String(tlsMode || '').trim().toLowerCase()
-  const e = normalizeTemplateEngine(engine)
-
-  const allowedTls = PROTOCOL_TLS_SUPPORT[p]
-  if (!allowedTls || !allowedTls.includes(tls)) return false
-
-  const allowedTransport = PROTOCOL_TRANSPORT_SUPPORT[p]
-  if (!allowedTransport || !allowedTransport.includes(t)) return false
-
-  if (e !== 'xray' && (t === 'mkcp' || t === 'xhttp')) return false
-
-  if (tls === 'reality') {
-    if (p !== 'vless') return false
-    if (e === 'xray') return t === 'tcp' || t === 'grpc' || t === 'xhttp'
-    return t === 'tcp' || t === 'grpc'
-  }
-
-  return true
-}
-
 export function findBuiltinTemplate(id) {
   return BUILTIN_TEMPLATES.find((item) => item.id === id)
 }

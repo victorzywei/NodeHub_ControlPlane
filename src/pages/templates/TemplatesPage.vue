@@ -7,6 +7,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { createTemplate, deleteTemplate, getTemplateRegistry, listTemplates, updateTemplate } from '@/api/services/templates'
 import type { NodeKind, TemplateRecord, TemplateRegistry } from '@/types/domain'
 import type { TemplateParamField } from '@/utils/templateParams'
+import { supportsProtocolTls, supportsTemplateCombination } from '@/utils/templateCapability'
 import { generateSecretValue, getPresetTemplateParamFields, valueToInput } from '@/utils/templateParams'
 import { useToastStore } from '@/stores/toast'
 
@@ -44,53 +45,6 @@ const form = reactive({
 
 const confirmDelete = ref(false)
 
-const PROTOCOL_TLS_SUPPORT: Record<string, string[]> = {
-  vless: ['none', 'tls', 'reality'],
-  trojan: ['tls'],
-  vmess: ['none', 'tls'],
-  hysteria2: ['tls'],
-  shadowsocks2022: ['none'],
-}
-
-const PROTOCOL_TRANSPORT_SUPPORT: Record<string, string[]> = {
-  vless: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  trojan: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  vmess: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
-  hysteria2: ['udp'],
-  shadowsocks2022: ['tcp', 'udp'],
-}
-
-function supportsProtocolTls(protocol: string, tlsMode: string): boolean {
-  if (!protocol || !tlsMode) return true
-  const allowed = PROTOCOL_TLS_SUPPORT[protocol]
-  if (!allowed) return true
-  return allowed.includes(tlsMode)
-}
-
-function supportsProtocolTransport(protocol: string, transport: string): boolean {
-  if (!protocol || !transport) return true
-  const allowed = PROTOCOL_TRANSPORT_SUPPORT[protocol]
-  if (!allowed) return true
-  return allowed.includes(transport)
-}
-
-function supportsComboTransport(engine: string, protocol: string, tlsMode: string, transport: string): boolean {
-  if (!supportsProtocolTransport(protocol, transport)) return false
-
-  if (engine !== 'xray' && (transport === 'mkcp' || transport === 'xhttp')) {
-    return false
-  }
-
-  if (tlsMode === 'reality') {
-    if (protocol !== 'vless') return false
-    if (engine === 'xray') {
-      return transport === 'tcp' || transport === 'grpc' || transport === 'xhttp'
-    }
-    return transport === 'tcp' || transport === 'grpc'
-  }
-  return true
-}
-
 const availableProtocols = computed(() => registry.value.protocols)
 
 const availableTlsModes = computed(() => {
@@ -99,7 +53,7 @@ const availableTlsModes = computed(() => {
 
 const availableTransports = computed(() => {
   return registry.value.transports.filter((item) =>
-    supportsComboTransport(form.engine, form.protocol, form.tls_mode, item.key),
+    supportsTemplateCombination(form.engine, form.protocol, item.key, form.tls_mode),
   )
 })
 
@@ -266,7 +220,7 @@ async function saveTemplate(): Promise<void> {
       toastStore.push('当前 TLS 模式不支持该协议', 'warning')
       return
     }
-    if (!supportsComboTransport(form.engine, form.protocol, form.tls_mode, form.transport)) {
+    if (!supportsTemplateCombination(form.engine, form.protocol, form.transport, form.tls_mode)) {
       toastStore.push('当前传输类型不支持该协议/TLS 组合', 'warning')
       return
     }

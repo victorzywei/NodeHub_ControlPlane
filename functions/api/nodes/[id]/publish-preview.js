@@ -6,7 +6,7 @@ import {
   resolveTemplateForApply,
   resolveTemplatesForPreview,
 } from '../../../_lib/node-apply.js'
-import { supportsTemplateCombination } from '../../../_lib/template-records.js'
+import { supportsTemplateCombination } from '../../../_lib/template-capability.js'
 import { KEY, kvGetJson } from '../../../_lib/kv.js'
 import { ok, fail } from '../../../_lib/response.js'
 

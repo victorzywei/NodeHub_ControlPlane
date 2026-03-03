@@ -80,7 +80,7 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
   if (transport === 'ws') {
     fields.push({ key: 'path', label: 'WS Path', type: 'text', valueType: 'string', defaultValue: '/ws' })
     fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
-  } else if (transport === 'httpupgrade' || transport === 'xhttp' || transport === 'h2') {
+  } else if (transport === 'httpupgrade' || transport === 'xhttp') {
     fields.push({ key: 'path', label: 'Path', type: 'text', valueType: 'string', defaultValue: '/' })
     fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
   } else if (transport === 'grpc') {
