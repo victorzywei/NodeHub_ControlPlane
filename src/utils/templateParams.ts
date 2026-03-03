@@ -33,8 +33,43 @@ function randomBase64Url(bytes: number): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
+function isBase64Url43(value: string): boolean {
+  return /^[A-Za-z0-9_-]{43}$/.test(String(value || ''))
+}
+
+export interface RealityKeyPair {
+  privateKey: string
+  publicKey: string
+}
+
+export async function generateRealityKeyPair(): Promise<RealityKeyPair> {
+  if (!crypto?.subtle) {
+    throw new Error('WebCrypto unavailable')
+  }
+
+  let keyPair: CryptoKeyPair
+  try {
+    keyPair = (await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits'])) as CryptoKeyPair
+  } catch {
+    throw new Error('X25519 not supported by current browser')
+  }
+
+  const [privateJwk, publicJwk] = await Promise.all([
+    crypto.subtle.exportKey('jwk', keyPair.privateKey),
+    crypto.subtle.exportKey('jwk', keyPair.publicKey),
+  ])
+  const privateKey = String((privateJwk as JsonWebKey).d || '')
+  const publicKey = String((publicJwk as JsonWebKey).x || '')
+
+  if (!isBase64Url43(privateKey) || !isBase64Url43(publicKey)) {
+    throw new Error('Invalid X25519 keypair result')
+  }
+
+  return { privateKey, publicKey }
+}
+
 export function generateSecretValue(key: string, ctx?: Record<string, string>): string {
-  if (key === 'reality_private_key') return randomBase64Url(32)
+  if (key === 'reality_private_key' || key === 'reality_public_key') return ''
   if (key === 'reality_short_id') return randomHex(8)
   if (key === 'password') {
     if (ctx?.['protocol'] === 'shadowsocks2022') {

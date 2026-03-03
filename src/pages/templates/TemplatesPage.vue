@@ -8,7 +8,7 @@ import { createTemplate, deleteTemplate, getTemplateRegistry, listTemplates, upd
 import type { NodeKind, TemplateRecord, TemplateRegistry } from '@/types/domain'
 import type { TemplateParamField } from '@/utils/templateParams'
 import { supportsProtocolTls, supportsTemplateCombination } from '@/utils/templateCapability'
-import { generateSecretValue, getPresetTemplateParamFields, valueToInput } from '@/utils/templateParams'
+import { generateRealityKeyPair, generateSecretValue, getPresetTemplateParamFields, valueToInput } from '@/utils/templateParams'
 import { useToastStore } from '@/stores/toast'
 
 interface EditorParamField extends TemplateParamField {
@@ -44,6 +44,7 @@ const form = reactive({
 })
 
 const confirmDelete = ref(false)
+const generatingRealityPair = ref(false)
 
 const availableProtocols = computed(() => registry.value.protocols)
 
@@ -115,7 +116,11 @@ function syncDefaultsForm(source: Record<string, unknown>): void {
 
     if (!value) {
       if (field.secret) {
-        value = generateSecretValue(field.key, { ...next, ...source, protocol: form.protocol } as Record<string, string>)
+        if (field.key === 'reality_private_key' || field.key === 'reality_public_key') {
+          value = ''
+        } else {
+          value = generateSecretValue(field.key, { ...next, ...source, protocol: form.protocol } as Record<string, string>)
+        }
       } else if (field.defaultValue !== undefined) {
         value = String(field.defaultValue)
       } else if (field.type === 'select' && field.options && field.options.length > 0) {
@@ -127,6 +132,31 @@ function syncDefaultsForm(source: Record<string, unknown>): void {
   })
 
   replaceDefaultsForm(next)
+}
+
+function hasField(key: string): boolean {
+  return allParamFields.value.some((field) => field.key === key)
+}
+
+async function regenRealityKeyPair(force = true, notify = true): Promise<void> {
+  if (!hasField('reality_private_key') || !hasField('reality_public_key')) return
+  if (generatingRealityPair.value) return
+
+  const privateKey = String(defaultsForm.reality_private_key || '')
+  const publicKey = String(defaultsForm.reality_public_key || '')
+  if (!force && privateKey && publicKey) return
+
+  generatingRealityPair.value = true
+  try {
+    const pair = await generateRealityKeyPair()
+    defaultsForm.reality_private_key = pair.privateKey
+    defaultsForm.reality_public_key = pair.publicKey
+    if (notify) toastStore.push('Reality 密钥对已生成', 'success')
+  } catch {
+    if (notify) toastStore.push('当前浏览器不支持 X25519 自动生成，请手动填入密钥对', 'warning')
+  } finally {
+    generatingRealityPair.value = false
+  }
 }
 
 function buildDefaultsPayload(): Record<string, unknown> {
@@ -179,6 +209,7 @@ function resetCreateForm(): void {
   form.description = ''
   ensureValidSelection()
   syncDefaultsForm({})
+  void regenRealityKeyPair(false, false)
 }
 
 function openCreate(): void {
@@ -200,10 +231,15 @@ function openEdit(template: TemplateRecord): void {
   form.description = template.description
   ensureValidSelection()
   syncDefaultsForm(template.defaults || {})
+  void regenRealityKeyPair(false, false)
   editorOpen.value = true
 }
 
 function regenSecret(key: string): void {
+  if (key === 'reality_private_key' || key === 'reality_public_key') {
+    void regenRealityKeyPair(true, true)
+    return
+  }
   defaultsForm[key] = generateSecretValue(key, { ...defaultsForm, protocol: form.protocol } as Record<string, string>)
 }
 
@@ -290,6 +326,7 @@ watch(
     if (editorMode.value !== 'create') return
     const nextSource: Record<string, unknown> = { ...defaultsForm }
     syncDefaultsForm(nextSource)
+    void regenRealityKeyPair(false, false)
   },
 )
 
@@ -298,6 +335,7 @@ watch(
   () => {
     if (!editorOpen.value) return
     ensureValidSelection()
+    void regenRealityKeyPair(false, false)
   },
 )
 
@@ -444,6 +482,11 @@ onMounted(loadData)
 
     <article class="panel panel-pad" style="display: grid; gap: 10px">
       <strong>细节参数</strong>
+      <div v-if="hasField('reality_private_key') && hasField('reality_public_key')" style="display: flex; justify-content: flex-end">
+        <button class="btn btn-secondary" type="button" :disabled="generatingRealityPair" @click="regenRealityKeyPair(true, true)">
+          {{ generatingRealityPair ? '生成中...' : '生成 Reality 密钥对' }}
+        </button>
+      </div>
 
       <label v-for="field in allParamFields" :key="field.key" style="display: grid; gap: 6px">
         <span style="font-weight: 700">{{ field.label }}</span>
