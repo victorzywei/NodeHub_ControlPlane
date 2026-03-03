@@ -39,6 +39,15 @@ export async function onRequestGet({ request, env, params }) {
   if (node.cf_api_token) {
     commandParts.push(` --cf-api-token ${quoteShell(node.cf_api_token)}`)
   }
+  if (node.warp_license) {
+    commandParts.push(` --warp-license ${quoteShell(node.warp_license)}`)
+  }
+  if (node.argo_token) {
+    commandParts.push(` --argo-token ${quoteShell(node.argo_token)}`)
+  }
+  if (node.argo_domain) {
+    commandParts.push(` --argo-domain ${quoteShell(node.argo_domain)}`)
+  }
 
   return ok({ command: commandParts.join('') })
 }

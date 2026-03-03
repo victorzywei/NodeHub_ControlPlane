@@ -78,6 +78,8 @@ export async function onRequestPost({ request, env }) {
     tls_mode: tlsMode,
     node_types: normalizeTemplateNodeTypes(body.node_types),
     description: String(body.description || ''),
+    warp_exit: body.warp_exit === true,
+    warp_route_mode: String(body.warp_route_mode || 'all'),
     defaults,
     created_at: now,
     updated_at: now,

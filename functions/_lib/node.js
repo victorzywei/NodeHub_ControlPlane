@@ -86,20 +86,19 @@ export function normalizeNode(node) {
     last_release_status: toString(node.last_release_status || 'idle'),
     last_release_message: toString(node.last_release_message),
 
-    // WARP
-    warp_enabled: toBool(node.warp_enabled),
-    warp_mode: toString(node.warp_mode) || 'off',
+    // WARP - user config
+    warp_license: toString(node.warp_license),
+    // WARP - agent-reported
     warp_private_key: toString(node.warp_private_key),
     warp_v6: toString(node.warp_v6),
     warp_reserved: toNumberArray(node.warp_reserved),
-    warp_endpoint: toString(node.warp_endpoint) || 'engage.cloudflareclient.com',
+    warp_endpoint: toString(node.warp_endpoint),
     warp_status: toString(node.warp_status),
 
-    // Argo
-    argo_enabled: toBool(node.argo_enabled),
+    // Argo - user config
     argo_token: toString(node.argo_token),
     argo_domain: toString(node.argo_domain),
-    argo_port: toPort(node.argo_port, 0),
+    // Argo - agent-reported
     argo_status: toString(node.argo_status),
     argo_temp_domain: toString(node.argo_temp_domain),
 

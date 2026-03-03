@@ -36,8 +36,16 @@ async function applyHeartbeat(node, report, kv) {
     node.memory_usage_percent = toMetric(report.memory_usage_percent, { min: 0, max: 100 })
     node.heartbeat_reported_at = now
 
-    // WARP / Argo status
+    // WARP registration data + status
+    if (report.warp_private_key !== undefined) node.warp_private_key = toText(report.warp_private_key, 256)
+    if (report.warp_v6 !== undefined) node.warp_v6 = toText(report.warp_v6, 256)
+    if (report.warp_reserved !== undefined) {
+      node.warp_reserved = Array.isArray(report.warp_reserved) ? report.warp_reserved.map(Number) : []
+    }
+    if (report.warp_endpoint !== undefined) node.warp_endpoint = toText(report.warp_endpoint, 256)
     if (report.warp_status !== undefined) node.warp_status = toText(report.warp_status, 256)
+
+    // Argo status
     if (report.argo_status !== undefined) node.argo_status = toText(report.argo_status, 256)
     if (report.argo_temp_domain !== undefined) node.argo_temp_domain = toText(report.argo_temp_domain, 256)
   }
@@ -87,6 +95,10 @@ export async function onRequestPost({ request, env }) {
     memory_used_mb: body.memory_used_mb,
     memory_total_mb: body.memory_total_mb,
     memory_usage_percent: body.memory_usage_percent,
+    warp_private_key: body.warp_private_key,
+    warp_v6: body.warp_v6,
+    warp_reserved: body.warp_reserved,
+    warp_endpoint: body.warp_endpoint,
     warp_status: body.warp_status,
     argo_status: body.argo_status,
     argo_temp_domain: body.argo_temp_domain,

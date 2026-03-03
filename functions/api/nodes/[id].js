@@ -23,7 +23,7 @@ export async function onRequestPatch({ request, env, params }) {
 
   const body = await request.json().catch(() => ({}))
   const stringFields = ['name', 'region', 'entry_cdn', 'entry_direct', 'entry_ip', 'github_mirror', 'cf_api_token',
-    'warp_mode', 'warp_private_key', 'warp_v6', 'warp_endpoint', 'argo_token', 'argo_domain']
+    'warp_license', 'argo_token', 'argo_domain']
 
   stringFields.forEach((field) => {
     if (body[field] !== undefined) {
@@ -33,18 +33,6 @@ export async function onRequestPatch({ request, env, params }) {
 
   if (body.tags !== undefined) {
     node.tags = Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : []
-  }
-
-  // Boolean fields
-  if (body.warp_enabled !== undefined) node.warp_enabled = body.warp_enabled === true
-  if (body.argo_enabled !== undefined) node.argo_enabled = body.argo_enabled === true
-
-  // Array/Number fields
-  if (body.warp_reserved !== undefined) {
-    node.warp_reserved = Array.isArray(body.warp_reserved) ? body.warp_reserved.map(Number) : []
-  }
-  if (body.argo_port !== undefined) {
-    node.argo_port = Number(body.argo_port) || 0
   }
 
   const nowIso = new Date().toISOString()

@@ -88,6 +88,8 @@ export async function onRequestPatch({ request, env, params }) {
       description: body.description !== undefined ? String(body.description) : existing.description,
       engine: nextEngine,
       node_types: nextNodeTypes,
+      warp_exit: body.warp_exit !== undefined ? body.warp_exit === true : (existing.warp_exit || false),
+      warp_route_mode: body.warp_route_mode !== undefined ? String(body.warp_route_mode) : (existing.warp_route_mode || 'all'),
       defaults: applyTemplateAutoDefaults({
         protocol: builtin.protocol,
         transport: builtin.transport,
@@ -132,6 +134,9 @@ export async function onRequestPatch({ request, env, params }) {
     tlsMode: current.tls_mode,
     defaults: mergedDefaults,
   })
+
+  if (body.warp_exit !== undefined) current.warp_exit = body.warp_exit === true
+  if (body.warp_route_mode !== undefined) current.warp_route_mode = String(body.warp_route_mode)
 
   current.updated_at = now
   await kvPutJson(kv, KEY.template(current.id), current)

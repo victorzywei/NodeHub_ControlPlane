@@ -63,20 +63,19 @@ export async function onRequestPost({ request, env }) {
     last_release_error_code: '',
     last_release_message: '',
 
-    // WARP
-    warp_enabled: body.warp_enabled === true,
-    warp_mode: String(body.warp_mode || 'off'),
-    warp_private_key: String(body.warp_private_key || ''),
-    warp_v6: String(body.warp_v6 || ''),
-    warp_reserved: Array.isArray(body.warp_reserved) ? body.warp_reserved.map(Number) : [],
-    warp_endpoint: String(body.warp_endpoint || 'engage.cloudflareclient.com'),
+    // WARP - user config
+    warp_license: String(body.warp_license || ''),
+    // WARP - agent-reported
+    warp_private_key: '',
+    warp_v6: '',
+    warp_reserved: [],
+    warp_endpoint: '',
     warp_status: '',
 
-    // Argo
-    argo_enabled: body.argo_enabled === true,
+    // Argo - user config
     argo_token: String(body.argo_token || ''),
     argo_domain: String(body.argo_domain || ''),
-    argo_port: Number(body.argo_port) || 0,
+    // Argo - agent-reported
     argo_status: '',
     argo_temp_domain: '',
 

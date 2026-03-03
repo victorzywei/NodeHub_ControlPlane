@@ -348,32 +348,32 @@ function buildSingboxInbound(template, params, idx) {
 }
 
 // ── WARP helpers ──
-function resolveWarpRoute(node, engine) {
-  if (!node || node.warp_enabled !== true) return null
-  const mode = String(node.warp_mode || 'off').toLowerCase()
-  if (mode === 'off') return null
-  const pvk = text(node.warp_private_key)
+function resolveWarpRoute(templates, node) {
+  // Check if any template in this group has warp_exit enabled
+  const warpTemplates = (templates || []).filter((t) => t.warp_exit === true || t.defaults?.warp_exit === true)
+  if (warpTemplates.length === 0) return null
+
+  // WARP keys come from node's heartbeat-reported fields (auto-registered by agent)
+  const pvk = text(node?.warp_private_key)
   if (!pvk) return null
 
-  const v6 = text(node.warp_v6) || '2606:4700:110:8d8d:1845:c39f:2dd5:a03a'
-  const reserved = Array.isArray(node.warp_reserved) && node.warp_reserved.length === 3
+  const v6 = text(node?.warp_v6) || '2606:4700:110:8d8d:1845:c39f:2dd5:a03a'
+  const reserved = Array.isArray(node?.warp_reserved) && node.warp_reserved.length === 3
     ? node.warp_reserved.map(Number)
     : [0, 0, 0]
-  const endpoint = text(node.warp_endpoint) || 'engage.cloudflareclient.com'
+  const rawEndpoint = text(node?.warp_endpoint) || 'engage.cloudflareclient.com:2408'
+  const endpoint = rawEndpoint.includes(':') ? rawEndpoint.split(':')[0] : rawEndpoint
+  const endpointPort = rawEndpoint.includes(':') ? Number(rawEndpoint.split(':')[1]) || 2408 : 2408
 
-  // Decide which engine should use WARP
-  const warpForSingbox = mode === 'all' || mode === 'singbox' || mode === 'ipv4' || mode === 'ipv6'
-  const warpForXray = mode === 'all' || mode === 'xray' || mode === 'ipv4' || mode === 'ipv6'
-  const enabled = engine === 'sing-box' ? warpForSingbox : warpForXray
-  if (!enabled) return null
+  // Use the first warp template's route mode
+  const mode = String(warpTemplates[0].warp_route_mode || warpTemplates[0].defaults?.warp_route_mode || 'all').toLowerCase()
 
-  // Decide which IP ranges to route through WARP
   let ipCidrs
   if (mode === 'ipv4') ipCidrs = ['0.0.0.0/0']
   else if (mode === 'ipv6') ipCidrs = ['::/0']
   else ipCidrs = ['0.0.0.0/0', '::/0']
 
-  return { pvk, v6, reserved, endpoint, ipCidrs }
+  return { pvk, v6, reserved, endpoint, endpointPort, ipCidrs }
 }
 
 function buildSingboxConfig(templates, params, node) {
@@ -382,7 +382,7 @@ function buildSingboxConfig(templates, params, node) {
   const route = { final: 'direct' }
   const endpoints = []
 
-  const warp = resolveWarpRoute(node, 'sing-box')
+  const warp = resolveWarpRoute(templates, node)
   if (warp) {
     endpoints.push({
       type: 'wireguard',
@@ -391,7 +391,7 @@ function buildSingboxConfig(templates, params, node) {
       private_key: warp.pvk,
       peers: [{
         address: warp.endpoint,
-        port: 2408,
+        port: warp.endpointPort,
         public_key: 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
         allowed_ips: ['0.0.0.0/0', '::/0'],
         reserved: warp.reserved,
@@ -590,9 +590,9 @@ function buildXrayConfig(templates, params, node) {
     rules: [],
   }
 
-  const warp = resolveWarpRoute(node, 'xray')
+  const warp = resolveWarpRoute(templates, node)
   if (warp) {
-    const warpEndpoint = `${warp.endpoint}:2408`
+    const warpEndpoint = `${warp.endpoint}:${warp.endpointPort}`
     outbounds.push({
       tag: 'x-warp-out',
       protocol: 'wireguard',
@@ -652,11 +652,6 @@ function buildManifest({
   summary,
   subscriptionOutbounds,
   createdAt,
-  warpMode,
-  argoEnabled,
-  argoToken,
-  argoDomain,
-  argoPort,
 }) {
   return {
     schema: 'nodehub-artifact-v1',
@@ -672,11 +667,6 @@ function buildManifest({
     summary,
     subscription_outbounds: subscriptionOutbounds,
     created_at: createdAt,
-    warp_mode: warpMode || 'off',
-    argo_enabled: argoEnabled || 'false',
-    argo_token: argoToken || '',
-    argo_domain: argoDomain || '',
-    argo_port: argoPort || '0',
   }
 }
 
@@ -692,11 +682,6 @@ function toManifestEnv(manifest) {
     `OPERATION_ID=${manifest.operation_id}`,
     `SUMMARY=${(manifest.summary || '').replace(/\r?\n/g, ' ')}`,
     `CREATED_AT=${manifest.created_at}`,
-    `WARP_MODE=${manifest.warp_mode || 'off'}`,
-    `ARGO_ENABLED=${manifest.argo_enabled || 'false'}`,
-    `ARGO_TOKEN=${manifest.argo_token || ''}`,
-    `ARGO_DOMAIN=${manifest.argo_domain || ''}`,
-    `ARGO_PORT=${manifest.argo_port || '0'}`,
   ].join('\n') + '\n'
 }
 
@@ -788,11 +773,6 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
     summary,
     subscriptionOutbounds,
     createdAt,
-    warpMode: node.warp_enabled ? (node.warp_mode || 'off') : 'off',
-    argoEnabled: node.argo_enabled ? 'true' : 'false',
-    argoToken: String(node.argo_token || ''),
-    argoDomain: String(node.argo_domain || ''),
-    argoPort: String(node.argo_port || '0'),
   })
 
   const files = [

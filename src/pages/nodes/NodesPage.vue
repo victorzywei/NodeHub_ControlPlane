@@ -41,16 +41,9 @@ const form = reactive({
   entry_ip: '',
   github_mirror: '',
   cf_api_token: '',
-  warp_enabled: false,
-  warp_mode: 'off' as string,
-  warp_private_key: '',
-  warp_v6: '',
-  warp_reserved: '',
-  warp_endpoint: 'engage.cloudflareclient.com',
-  argo_enabled: false,
+  warp_license: '',
   argo_token: '',
   argo_domain: '',
-  argo_port: 0,
 })
 
 const publishOpen = ref(false)
@@ -109,10 +102,6 @@ function sanitizePublishTemplateIds(ids: string[], nodeType: NodeKind): string[]
 }
 
 function toPayload(): Partial<NodeRecord> {
-  const reservedArr = form.warp_reserved
-    .split(',')
-    .map((v: string) => Number(v.trim()))
-    .filter((n: number) => Number.isFinite(n))
   return {
     name: form.name.trim(),
     node_type: form.node_type,
@@ -126,16 +115,9 @@ function toPayload(): Partial<NodeRecord> {
     entry_ip: form.entry_ip.trim(),
     github_mirror: form.github_mirror.trim(),
     cf_api_token: form.cf_api_token.trim(),
-    warp_enabled: form.warp_enabled,
-    warp_mode: form.warp_mode,
-    warp_private_key: form.warp_private_key.trim(),
-    warp_v6: form.warp_v6.trim(),
-    warp_reserved: reservedArr,
-    warp_endpoint: form.warp_endpoint.trim() || 'engage.cloudflareclient.com',
-    argo_enabled: form.argo_enabled,
+    warp_license: form.warp_license.trim(),
     argo_token: form.argo_token.trim(),
     argo_domain: form.argo_domain.trim(),
-    argo_port: Number(form.argo_port) || 0,
   } as Partial<NodeRecord>
 }
 
@@ -149,16 +131,9 @@ function fillForm(node?: NodeRecord): void {
   form.entry_ip = node?.entry_ip || ''
   form.github_mirror = node?.github_mirror || ''
   form.cf_api_token = node?.cf_api_token || ''
-  form.warp_enabled = node?.warp_enabled || false
-  form.warp_mode = node?.warp_mode || 'off'
-  form.warp_private_key = node?.warp_private_key || ''
-  form.warp_v6 = node?.warp_v6 || ''
-  form.warp_reserved = Array.isArray(node?.warp_reserved) ? node.warp_reserved.join(', ') : ''
-  form.warp_endpoint = node?.warp_endpoint || 'engage.cloudflareclient.com'
-  form.argo_enabled = node?.argo_enabled || false
+  form.warp_license = node?.warp_license || ''
   form.argo_token = node?.argo_token || ''
   form.argo_domain = node?.argo_domain || ''
-  form.argo_port = node?.argo_port || 0
 }
 
 async function loadNodesData(): Promise<void> {
@@ -491,16 +466,17 @@ onMounted(loadNodesData)
       <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">WARP 出口</div>
-      <div>状态：
-        <span class="badge" :class="detailNode.warp_enabled ? 'success' : 'warning'">{{ detailNode.warp_enabled ? `已启用 (${detailNode.warp_mode})` : '未启用' }}</span>
+      <div>License：{{ detailNode.warp_license ? '已配置' : '未配置' }}</div>
+      <div>注册状态：
+        <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
       </div>
-      <div v-if="detailNode.warp_status">运行状态：{{ detailNode.warp_status }}</div>
+      <div v-if="detailNode.warp_private_key">密钥：已就绪</div>
+      <div v-if="detailNode.warp_v6">IPv6：{{ detailNode.warp_v6 }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">Argo 隧道</div>
-      <div>状态：
-        <span class="badge" :class="detailNode.argo_enabled ? 'success' : 'warning'">{{ detailNode.argo_enabled ? '已启用' : '未启用' }}</span>
+      <div>配置：
+        <span class="badge" :class="detailNode.argo_token ? 'success' : (detailNode.argo_status ? 'success' : 'warning')">{{ detailNode.argo_token ? '固定隧道' : (detailNode.argo_status && detailNode.argo_status !== 'off' ? '临时隧道' : '未配置') }}</span>
       </div>
-      <div v-if="detailNode.argo_enabled">模式：{{ detailNode.argo_token ? '固定隧道' : '临时隧道' }}</div>
       <div v-if="detailNode.argo_domain">域名：{{ detailNode.argo_domain }}</div>
       <div v-if="detailNode.argo_temp_domain">临时域名：{{ detailNode.argo_temp_domain }}</div>
       <div v-if="detailNode.argo_status">运行状态：{{ detailNode.argo_status }}</div>
@@ -564,68 +540,32 @@ onMounted(loadNodesData)
     </label>
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
-      <div style="font-weight: 700; margin-bottom: 10px">WARP 出口 (WireGuard)</div>
-      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-        <input type="checkbox" v-model="form.warp_enabled" />
-        <span>启用 WARP 出口</span>
+      <div style="font-weight: 700; margin-bottom: 10px">WARP 出口</div>
+      <label>
+        WARP+ License Key (可选)
+        <input v-model="form.warp_license" class="input" placeholder="Agent 安装时自动注册并上报密钥" />
       </label>
-      <template v-if="form.warp_enabled">
-        <label>
-          路由模式
-          <select v-model="form.warp_mode" class="select">
-            <option value="all">全部流量 (IPv4+IPv6)</option>
-            <option value="ipv4">仅 IPv4</option>
-            <option value="ipv6">仅 IPv6</option>
-            <option value="singbox">仅 sing-box 引擎</option>
-            <option value="xray">仅 xray 引擎</option>
-          </select>
-        </label>
-        <label>
-          Private Key
-          <input v-model="form.warp_private_key" class="input" placeholder="WireGuard 私钥" />
-        </label>
-        <label>
-          IPv6 地址
-          <input v-model="form.warp_v6" class="input" placeholder="例: 2606:4700:110:..." />
-        </label>
-        <label>
-          Reserved (逗号分隔)
-          <input v-model="form.warp_reserved" class="input" placeholder="例: 215, 69, 233" />
-        </label>
-        <label>
-          Endpoint
-          <input v-model="form.warp_endpoint" class="input" placeholder="默认 engage.cloudflareclient.com" />
-        </label>
-      </template>
+      <div class="muted" style="font-size: 12px">
+        填写后安装命令包含 --warp-license，Agent 自动注册密钥并上报。在模板编辑器中勾选"WARP 出口"启用。
+      </div>
     </div>
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
-      <div style="font-weight: 700; margin-bottom: 10px">Argo 隧道 (Cloudflared)</div>
-      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-        <input type="checkbox" v-model="form.argo_enabled" />
-        <span>启用 Argo 隧道</span>
+      <div style="font-weight: 700; margin-bottom: 10px">Argo 隧道</div>
+      <label>
+        Tunnel Token (可选)
+        <input v-model="form.argo_token" class="input" placeholder="固定隧道 Token，留空使用临时隧道" />
       </label>
-      <template v-if="form.argo_enabled">
-        <label>
-          Tunnel Token (留空则使用临时隧道)
-          <input v-model="form.argo_token" class="input" placeholder="固定隧道 Token" />
-        </label>
-        <label>
-          域名 (固定隧道填写)
-          <input v-model="form.argo_domain" class="input" placeholder="例: tunnel.example.com" />
-        </label>
-        <label>
-          本地代理端口 (临时隧道用)
-          <input v-model.number="form.argo_port" class="input" type="number" placeholder="cloudflared 代理的本地端口" />
-        </label>
-        <div class="muted" style="font-size: 12px">
-          固定隧道：提供 Tunnel Token + 域名，Agent 使用 cloudflared run --token 连接。<br/>
-          临时隧道：不填 Token，填写本地端口，Agent 自动申请 TryCloudflare 临时域名。
-        </div>
-      </template>
+      <label>
+        域名 (可选)
+        <input v-model="form.argo_domain" class="input" placeholder="固定隧道域名" />
+      </label>
+      <div class="muted" style="font-size: 12px">
+        有 Token：固定隧道。无 Token：Agent 自动申请 TryCloudflare 临时域名。
+      </div>
     </div>
 
-    <div class="muted" style="margin-bottom: 8px; margin-top: 12px">协议模板请在节点列表的"协议发布"中单独操作。</div>
+    <div class="muted" style="margin-bottom: 8px; margin-top: 12px">协议模板请在节点列表的"协议发布"中单独操作。WARP 出口在模板编辑器中启用。</div>
 
     <button class="btn btn-primary" @click="saveNode">保存</button>
   </DetailDrawer>

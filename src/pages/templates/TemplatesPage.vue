@@ -41,6 +41,8 @@ const form = reactive({
   tls_mode: '',
   node_type: 'vps' as NodeKind,
   description: '',
+  warp_exit: false,
+  warp_route_mode: 'all' as string,
 })
 
 const confirmDelete = ref(false)
@@ -220,6 +222,8 @@ function resetCreateForm(): void {
   form.transport = registry.value.transports[0]?.key || ''
   form.node_type = (registry.value.node_types[0]?.key as NodeKind) || 'vps'
   form.description = ''
+  form.warp_exit = false
+  form.warp_route_mode = 'all'
   ensureValidSelection()
   syncDefaultsForm({})
   void regenRealityKeyPair(false, false)
@@ -242,6 +246,8 @@ function openEdit(template: TemplateRecord): void {
   form.tls_mode = template.tls_mode
   form.node_type = (template.node_types[0] as NodeKind) || 'vps'
   form.description = template.description
+  form.warp_exit = template.warp_exit || false
+  form.warp_route_mode = template.warp_route_mode || 'all'
   ensureValidSelection()
   syncDefaultsForm(template.defaults || {})
   void regenRealityKeyPair(false, false)
@@ -300,6 +306,8 @@ async function saveTemplate(): Promise<void> {
       tls_mode: form.tls_mode,
       node_types: [form.node_type],
       description: form.description.trim(),
+      warp_exit: form.warp_exit,
+      warp_route_mode: form.warp_route_mode,
       defaults,
     }
 
@@ -523,6 +531,25 @@ onMounted(loadData)
       </label>
 
       <div class="muted" style="font-size: 12px">仅显示当前“协议 + 安全 + 传输”组合支持的参数，避免无效配置。</div>
+    </article>
+
+    <article class="panel panel-pad" style="display: grid; gap: 10px">
+      <strong>WARP 出口</strong>
+      <label style="display: flex; align-items: center; gap: 8px">
+        <input type="checkbox" v-model="form.warp_exit" />
+        <span>使用 WARP 作为出口</span>
+      </label>
+      <template v-if="form.warp_exit">
+        <label>
+          路由模式
+          <select v-model="form.warp_route_mode" class="select">
+            <option value="all">全部流量 (IPv4+IPv6)</option>
+            <option value="ipv4">仅 IPv4</option>
+            <option value="ipv6">仅 IPv6</option>
+          </select>
+        </label>
+      </template>
+      <div class="muted" style="font-size: 12px">启用后发布的配置会通过 WARP WireGuard 路由。节点需先配置 WARP License 并完成注册。</div>
     </article>
 
     <div style="display: flex; gap: 8px">

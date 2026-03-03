@@ -22,6 +22,9 @@ RECONCILE_INTERVAL=15
 STATE_DIR="/var/lib/nodehub-agent"
 AGENT_ROOT="/usr/local/lib/nodehub-agent"
 CONFIG_ROOT="/etc/nodehub-agent"
+WARP_LICENSE=""
+ARGO_TOKEN=""
+ARGO_DOMAIN=""
 
 # ---------- Helpers ----------
 log()  { printf '%s\n' "[INFO] $*"; }
@@ -139,6 +142,9 @@ Options:
   --tls-domain-alt <domain>
   --github-mirror <mirror_prefix>   e.g. https://ghproxy.com
   --cf-api-token <token>           Cloudflare API token for DNS validation
+  --warp-license <key>             WARP+ license key for warp-go registration
+  --argo-token <token>             Cloudflare Tunnel token (fixed tunnel)
+  --argo-domain <domain>           Cloudflare Tunnel fixed domain
   --heartbeat-interval <seconds>   default: 600
   --reconcile-interval <seconds>   default: 15
   --state-dir <dir>                default: /var/lib/nodehub-agent
@@ -161,6 +167,9 @@ while [[ $# -gt 0 ]]; do
     --tls-domain-alt)   need_value "$1" "${2:-}"; TLS_DOMAIN_ALT="$2"; shift 2 ;;
     --github-mirror)    need_value "$1" "${2:-}"; GITHUB_MIRROR="$2"; shift 2 ;;
     --cf-api-token)     need_value "$1" "${2:-}"; CF_API_TOKEN="$2"; shift 2 ;;
+    --warp-license)     need_value "$1" "${2:-}"; WARP_LICENSE="$2"; shift 2 ;;
+    --argo-token)       need_value "$1" "${2:-}"; ARGO_TOKEN="$2"; shift 2 ;;
+    --argo-domain)      need_value "$1" "${2:-}"; ARGO_DOMAIN="$2"; shift 2 ;;
     --heartbeat-interval) need_value "$1" "${2:-}"; HEARTBEAT_INTERVAL="$2"; shift 2 ;;
     --reconcile-interval) need_value "$1" "${2:-}"; RECONCILE_INTERVAL="$2"; shift 2 ;;
     --state-dir)        need_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
@@ -397,6 +406,142 @@ install_cloudflared() {
 log "Installing cloudflared (best-effort)..."
 install_cloudflared || true
 
+# ---------- Install warp-go + register ----------
+WARPGO_BIN=""
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  WARPGO_BIN="${HOME}/.local/bin/warp-go"
+else
+  WARPGO_BIN="/usr/local/bin/warp-go"
+fi
+
+install_warpgo() {
+  if [[ -x "$WARPGO_BIN" ]]; then
+    log "warp-go already installed."
+    return 0
+  fi
+
+  local wg_arch=""
+  case "$ARCH" in
+    x86_64|amd64) wg_arch="amd64" ;;
+    aarch64|arm64) wg_arch="arm64" ;;
+    armv7l|armv7) wg_arch="arm" ;;
+    *)
+      warn "Unsupported architecture for warp-go: $ARCH"
+      return 1
+      ;;
+  esac
+
+  local url
+  url="$(wrap_url "https://gitlab.com/ProjectWARP/warp-go/-/releases/permalink/latest/downloads/warp-go_linux_${wg_arch}")"
+
+  log "Downloading warp-go: $url"
+  mkdir -p "$(dirname "$WARPGO_BIN")" || true
+  curl -fsSL -o "$WARPGO_BIN" "$url" || { warn "Failed to download warp-go"; return 1; }
+  chmod 755 "$WARPGO_BIN"
+  log "warp-go installed to: $WARPGO_BIN"
+}
+
+register_warp() {
+  [[ -n "$WARP_LICENSE" ]] || return 0
+  [[ -x "$WARPGO_BIN" ]] || { warn "warp-go not installed, skipping WARP registration"; return 1; }
+
+  local warp_dir="$STATE_DIR/warp"
+  mkdir -p "$warp_dir"
+
+  # Skip if already registered
+  if [[ -f "$warp_dir/warp.conf" && -f "$warp_dir/private_key" ]]; then
+    log "WARP already registered, skipping."
+    return 0
+  fi
+
+  log "Registering WARP account..."
+  local warp_conf="$warp_dir/warp.conf"
+
+  # Register new account
+  if ! "$WARPGO_BIN" --register --config "$warp_conf" 2>/dev/null; then
+    warn "WARP registration failed"
+    return 1
+  fi
+
+  # Upgrade with license if provided
+  if [[ -n "$WARP_LICENSE" ]]; then
+    log "Upgrading WARP account with license..."
+    # Update license in config
+    if grep -q '^LicenseKey' "$warp_conf" 2>/dev/null; then
+      sedi "s/^LicenseKey.*/LicenseKey = ${WARP_LICENSE}/" "$warp_conf"
+    else
+      echo "LicenseKey = ${WARP_LICENSE}" >> "$warp_conf"
+    fi
+    "$WARPGO_BIN" --update --config "$warp_conf" 2>/dev/null || warn "WARP license upgrade failed (continuing with free)"
+  fi
+
+  # Extract keys from warp.conf
+  local pvk v6 reserved endpoint
+  pvk="$(grep -oP '(?<=PrivateKey = ).*' "$warp_conf" 2>/dev/null || true)"
+  v6="$(grep -oP '(?<=Address6 = )[^/]+' "$warp_conf" 2>/dev/null || true)"
+  endpoint="$(grep -oP '(?<=Endpoint = ).*' "$warp_conf" 2>/dev/null || echo 'engage.cloudflareclient.com:2408')"
+  reserved="$(grep -oP '(?<=Reserved = ).*' "$warp_conf" 2>/dev/null || echo '0,0,0')"
+
+  # Save extracted keys for heartbeat reporting
+  echo "$pvk" > "$warp_dir/private_key"
+  echo "$v6" > "$warp_dir/v6"
+  echo "$reserved" > "$warp_dir/reserved"
+  echo "$endpoint" > "$warp_dir/endpoint"
+  echo "registered" > "$STATE_DIR/warp-status"
+
+  log "WARP registered: v6=$v6 endpoint=$endpoint"
+}
+
+if [[ -n "$WARP_LICENSE" ]]; then
+  log "Installing warp-go and registering WARP..."
+  install_warpgo || true
+  register_warp || true
+fi
+
+# ---------- Start Argo tunnel ----------
+start_argo_tunnel() {
+  local argo_pidfile="$STATE_DIR/cloudflared.pid"
+
+  # Stop existing if any
+  if [[ -f "$argo_pidfile" ]]; then
+    local old_pid
+    old_pid="$(cat "$argo_pidfile" 2>/dev/null || true)"
+    [[ -n "$old_pid" ]] && kill "$old_pid" 2>/dev/null || true
+    rm -f "$argo_pidfile"
+  fi
+  rm -f "$STATE_DIR/argo-domain" "$STATE_DIR/argo.log"
+
+  command -v cloudflared >/dev/null 2>&1 || [[ -x "$CLOUDFLARED_BIN" ]] || { warn "cloudflared not available"; return 1; }
+  local cf_bin
+  cf_bin="$(command -v cloudflared 2>/dev/null || echo "$CLOUDFLARED_BIN")"
+
+  if [[ -n "$ARGO_TOKEN" ]]; then
+    # Fixed tunnel
+    log "Starting Argo fixed tunnel..."
+    nohup "$cf_bin" tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$ARGO_TOKEN" > "$STATE_DIR/argo.log" 2>&1 &
+    echo $! > "$argo_pidfile"
+    [[ -n "$ARGO_DOMAIN" ]] && echo "$ARGO_DOMAIN" > "$STATE_DIR/argo-domain"
+    log "Argo fixed tunnel started (domain: ${ARGO_DOMAIN:-<from-dashboard>})"
+  else
+    # Temp tunnel — find the first listening port from templates
+    local temp_port=0
+    # Default to a common port; the actual port will be from the protocol config
+    temp_port=2053
+    log "Starting Argo temp tunnel on port $temp_port..."
+    nohup "$cf_bin" tunnel --url "http://localhost:${temp_port}" --edge-ip-version auto --no-autoupdate --protocol http2 > "$STATE_DIR/argo.log" 2>&1 &
+    echo $! > "$argo_pidfile"
+    sleep 8
+    local temp_domain
+    temp_domain="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo.log" 2>/dev/null | head -n1 | sed 's|https://||')"
+    [[ -n "$temp_domain" ]] && echo "$temp_domain" > "$STATE_DIR/argo-domain"
+    log "Argo temp tunnel started (domain: ${temp_domain:-<pending>})"
+  fi
+}
+
+if [[ -n "$ARGO_TOKEN" ]] || [[ -n "$ARGO_DOMAIN" ]]; then
+  start_argo_tunnel || true
+fi
+
 # ---------- Write config + runner ----------
 CONFIG_FILE="${CONFIG_ROOT}/config.env"
 RUNNER_SCRIPT="${AGENT_ROOT}/agent-runner.sh"
@@ -524,12 +669,29 @@ build_heartbeat_payload() {
   protocol_json="$(json_escape "$protocol_version")"
   error_json="$(json_escape "$error_message")"
 
-  # WARP status
-  local warp_status="off"
+  # WARP registration data + status
+  local warp_status="off" warp_pvk="" warp_v6="" warp_reserved="" warp_endpoint=""
+  local warp_dir="$STATE_DIR/warp"
   if [[ -f "$STATE_DIR/warp-status" ]]; then
     warp_status="$(cat "$STATE_DIR/warp-status" 2>/dev/null || echo off)"
   fi
+  if [[ -f "$warp_dir/private_key" ]]; then
+    warp_pvk="$(cat "$warp_dir/private_key" 2>/dev/null || true)"
+    warp_v6="$(cat "$warp_dir/v6" 2>/dev/null || true)"
+    warp_reserved="$(cat "$warp_dir/reserved" 2>/dev/null || echo '0,0,0')"
+    warp_endpoint="$(cat "$warp_dir/endpoint" 2>/dev/null || echo 'engage.cloudflareclient.com:2408')"
+  fi
   warp_json="$(json_escape "$warp_status")"
+  local warp_pvk_json warp_v6_json warp_endpoint_json
+  warp_pvk_json="$(json_escape "$warp_pvk")"
+  warp_v6_json="$(json_escape "$warp_v6")"
+  warp_endpoint_json="$(json_escape "$warp_endpoint")"
+
+  # Convert reserved "1,2,3" to JSON array [1,2,3]
+  local warp_reserved_arr="[0,0,0]"
+  if [[ -n "$warp_reserved" ]]; then
+    warp_reserved_arr="[$(echo "$warp_reserved" | tr -d ' ')]"
+  fi
 
   # Argo status
   local argo_status="off" argo_temp_domain=""
@@ -549,7 +711,7 @@ build_heartbeat_payload() {
   argo_json="$(json_escape "$argo_status")"
   argo_domain_json="$(json_escape "$argo_temp_domain")"
 
-  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
+  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"warp_private_key\":\"$warp_pvk_json\",\"warp_v6\":\"$warp_v6_json\",\"warp_reserved\":$warp_reserved_arr,\"warp_endpoint\":\"$warp_endpoint_json\",\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
 }
 
 heartbeat_once() {
@@ -1135,55 +1297,6 @@ apply_release() {
 
   APPLY_STAGE="cleanup"
   rm -rf "$tmp_dir"
-
-  # ── Argo tunnel lifecycle ──
-  APPLY_STAGE="argo_tunnel"
-  local argo_enabled="" argo_token="" argo_domain="" argo_port=""
-  argo_enabled="$(read_manifest_field "$release_dir" "ARGO_ENABLED")"
-  argo_token="$(read_manifest_field "$release_dir" "ARGO_TOKEN")"
-  argo_domain="$(read_manifest_field "$release_dir" "ARGO_DOMAIN")"
-  argo_port="$(read_manifest_field "$release_dir" "ARGO_PORT")"
-  local argo_pidfile="$STATE_DIR/cloudflared.pid"
-
-  # Stop existing cloudflared
-  if [[ -f "$argo_pidfile" ]]; then
-    local old_pid
-    old_pid="$(cat "$argo_pidfile" 2>/dev/null || true)"
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-      kill "$old_pid" 2>/dev/null || true
-      sleep 2
-      kill -9 "$old_pid" 2>/dev/null || true
-    fi
-    rm -f "$argo_pidfile"
-  fi
-  rm -f "$STATE_DIR/argo-domain" "$STATE_DIR/argo.log"
-
-  if [[ "$argo_enabled" == "true" ]] && command -v cloudflared >/dev/null 2>&1; then
-    if [[ -n "$argo_token" ]]; then
-      # Fixed tunnel
-      nohup cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$argo_token" > "$STATE_DIR/argo.log" 2>&1 &
-      echo $! > "$argo_pidfile"
-      [[ -n "$argo_domain" ]] && echo "$argo_domain" > "$STATE_DIR/argo-domain"
-    elif [[ -n "$argo_port" && "$argo_port" -gt 0 ]]; then
-      # Temp tunnel (TryCloudflare)
-      nohup cloudflared tunnel --url http://localhost:${argo_port} --edge-ip-version auto --no-autoupdate --protocol http2 > "$STATE_DIR/argo.log" 2>&1 &
-      echo $! > "$argo_pidfile"
-      # Wait for temp domain to appear in log
-      sleep 8
-      local temp_domain
-      temp_domain="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo.log" 2>/dev/null | head -n1 | sed 's|https://||')"
-      [[ -n "$temp_domain" ]] && echo "$temp_domain" > "$STATE_DIR/argo-domain"
-    fi
-  fi
-
-  # ── WARP status ──
-  local warp_mode=""
-  warp_mode="$(read_manifest_field "$release_dir" "WARP_MODE")"
-  if [[ -n "$warp_mode" && "$warp_mode" != "off" ]]; then
-    echo "active:${warp_mode}" > "$STATE_DIR/warp-status"
-  else
-    echo "off" > "$STATE_DIR/warp-status"
-  fi
 
   echo "APPLY_DETAIL=stage=done; rev=r${rev}; sha256=${actual_sha}; action_sing_box=${action_sing_box}; action_xray=${action_xray}; reload_mode=${reload_mode}; stop_sing_box=${stop_sing_box}; start_sing_box=${start_sing_box}; stop_xray=${stop_xray}; start_xray=${start_xray}"
 }

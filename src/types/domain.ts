@@ -82,22 +82,21 @@ export interface NodeRecord {
   last_release_error_code: string
   last_release_message: string
 
-  // WARP WireGuard exit
-  warp_enabled: boolean
-  warp_mode: 'all' | 'ipv4' | 'ipv6' | 'singbox' | 'xray' | 'off'
+  // WARP - user config (install param)
+  warp_license: string
+  // WARP - agent-reported (heartbeat)
   warp_private_key: string
   warp_v6: string
   warp_reserved: number[]
   warp_endpoint: string
-  warp_status: string            // agent-reported
+  warp_status: string
 
-  // Cloudflare Argo tunnel
-  argo_enabled: boolean
-  argo_token: string             // fixed tunnel token; empty = temp tunnel
-  argo_domain: string            // fixed tunnel domain
-  argo_port: number              // local port cloudflared proxies to
-  argo_status: string            // agent-reported
-  argo_temp_domain: string       // agent-reported temp domain
+  // Argo - user config (install param)
+  argo_token: string
+  argo_domain: string
+  // Argo - agent-reported (heartbeat)
+  argo_status: string
+  argo_temp_domain: string
 
   created_at: string
   updated_at: string
@@ -113,6 +112,8 @@ export interface TemplateRecord {
   tls_mode: string
   node_types: NodeKind[]
   description: string
+  warp_exit: boolean
+  warp_route_mode: 'all' | 'ipv4' | 'ipv6'
   defaults: Record<string, unknown>
   created_at: string
   updated_at: string
