@@ -347,17 +347,72 @@ function buildSingboxInbound(template, params, idx) {
   throw new Error(`unsupported template protocol for sing-box: ${template.protocol}`)
 }
 
-function buildSingboxConfig(templates, params) {
+// ── WARP helpers ──
+function resolveWarpRoute(node, engine) {
+  if (!node || node.warp_enabled !== true) return null
+  const mode = String(node.warp_mode || 'off').toLowerCase()
+  if (mode === 'off') return null
+  const pvk = text(node.warp_private_key)
+  if (!pvk) return null
+
+  const v6 = text(node.warp_v6) || '2606:4700:110:8d8d:1845:c39f:2dd5:a03a'
+  const reserved = Array.isArray(node.warp_reserved) && node.warp_reserved.length === 3
+    ? node.warp_reserved.map(Number)
+    : [0, 0, 0]
+  const endpoint = text(node.warp_endpoint) || 'engage.cloudflareclient.com'
+
+  // Decide which engine should use WARP
+  const warpForSingbox = mode === 'all' || mode === 'singbox' || mode === 'ipv4' || mode === 'ipv6'
+  const warpForXray = mode === 'all' || mode === 'xray' || mode === 'ipv4' || mode === 'ipv6'
+  const enabled = engine === 'sing-box' ? warpForSingbox : warpForXray
+  if (!enabled) return null
+
+  // Decide which IP ranges to route through WARP
+  let ipCidrs
+  if (mode === 'ipv4') ipCidrs = ['0.0.0.0/0']
+  else if (mode === 'ipv6') ipCidrs = ['::/0']
+  else ipCidrs = ['0.0.0.0/0', '::/0']
+
+  return { pvk, v6, reserved, endpoint, ipCidrs }
+}
+
+function buildSingboxConfig(templates, params, node) {
   const inbounds = templates.map((tpl, idx) => buildSingboxInbound(tpl, params, idx))
-  return {
-    log: {
-      level: 'info',
-      timestamp: true,
-    },
-    inbounds,
-    outbounds: [{ type: 'direct', tag: 'direct' }],
-    route: { final: 'direct' },
+  const outbounds = [{ type: 'direct', tag: 'direct' }]
+  const route = { final: 'direct' }
+  const endpoints = []
+
+  const warp = resolveWarpRoute(node, 'sing-box')
+  if (warp) {
+    endpoints.push({
+      type: 'wireguard',
+      tag: 'warp-out',
+      address: [`172.16.0.2/32`, `${warp.v6}/128`],
+      private_key: warp.pvk,
+      peers: [{
+        address: warp.endpoint,
+        port: 2408,
+        public_key: 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
+        allowed_ips: ['0.0.0.0/0', '::/0'],
+        reserved: warp.reserved,
+      }],
+    })
+    route.rules = [
+      { action: 'sniff' },
+      { action: 'resolve', strategy: 'prefer_ipv4' },
+      { ip_cidr: warp.ipCidrs, outbound: 'warp-out' },
+    ]
+    route.final = 'warp-out'
   }
+
+  const config = {
+    log: { level: 'info', timestamp: true },
+    inbounds,
+    outbounds,
+    route,
+  }
+  if (endpoints.length > 0) config.endpoints = endpoints
+  return config
 }
 
 function buildXrayStreamSettings(template, settings) {
@@ -525,24 +580,47 @@ function buildXrayInbound(template, params, idx) {
   throw new Error(`unsupported template protocol for xray: ${template.protocol}`)
 }
 
-function buildXrayConfig(templates, params) {
+function buildXrayConfig(templates, params, node) {
   const inbounds = templates.map((tpl, idx) => buildXrayInbound(tpl, params, idx))
-  return {
-    log: {
-      loglevel: 'warning',
-    },
-    inbounds,
-    outbounds: [
-      {
-        tag: 'direct',
-        protocol: 'freedom',
-      },
-    ],
-    routing: {
-      domainStrategy: 'AsIs',
-      rules: [],
-    },
+  const outbounds = [
+    { tag: 'direct', protocol: 'freedom' },
+  ]
+  const routing = {
+    domainStrategy: 'AsIs',
+    rules: [],
   }
+
+  const warp = resolveWarpRoute(node, 'xray')
+  if (warp) {
+    const warpEndpoint = `${warp.endpoint}:2408`
+    outbounds.push({
+      tag: 'x-warp-out',
+      protocol: 'wireguard',
+      settings: {
+        secretKey: warp.pvk,
+        address: ['172.16.0.2/32', `${warp.v6}/128`],
+        peers: [{
+          publicKey: 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
+          allowedIPs: ['0.0.0.0/0', '::/0'],
+          endpoint: warpEndpoint,
+        }],
+        reserved: warp.reserved,
+      },
+    })
+    outbounds.push({
+      tag: 'warp-out',
+      protocol: 'freedom',
+      settings: { domainStrategy: 'ForceIPv6v4' },
+      proxySettings: { tag: 'x-warp-out' },
+    })
+    routing.domainStrategy = 'IPOnDemand'
+    routing.rules = [
+      { type: 'field', ip: warp.ipCidrs, network: 'tcp,udp', outboundTag: 'warp-out' },
+      { type: 'field', network: 'tcp,udp', outboundTag: 'warp-out' },
+    ]
+  }
+
+  return { log: { loglevel: 'warning' }, inbounds, outbounds, routing }
 }
 
 function buildSubscriptionOutbounds(templates, params) {
@@ -574,6 +652,11 @@ function buildManifest({
   summary,
   subscriptionOutbounds,
   createdAt,
+  warpMode,
+  argoEnabled,
+  argoToken,
+  argoDomain,
+  argoPort,
 }) {
   return {
     schema: 'nodehub-artifact-v1',
@@ -589,6 +672,11 @@ function buildManifest({
     summary,
     subscription_outbounds: subscriptionOutbounds,
     created_at: createdAt,
+    warp_mode: warpMode || 'off',
+    argo_enabled: argoEnabled || 'false',
+    argo_token: argoToken || '',
+    argo_domain: argoDomain || '',
+    argo_port: argoPort || '0',
   }
 }
 
@@ -604,6 +692,11 @@ function toManifestEnv(manifest) {
     `OPERATION_ID=${manifest.operation_id}`,
     `SUMMARY=${(manifest.summary || '').replace(/\r?\n/g, ' ')}`,
     `CREATED_AT=${manifest.created_at}`,
+    `WARP_MODE=${manifest.warp_mode || 'off'}`,
+    `ARGO_ENABLED=${manifest.argo_enabled || 'false'}`,
+    `ARGO_TOKEN=${manifest.argo_token || ''}`,
+    `ARGO_DOMAIN=${manifest.argo_domain || ''}`,
+    `ARGO_PORT=${manifest.argo_port || '0'}`,
   ].join('\n') + '\n'
 }
 
@@ -615,13 +708,13 @@ function buildBundleText({ rev, engine, reloadCmd, files }) {
   return lines.join('\n') + '\n'
 }
 
-function buildConfigObject(engine, templates, params) {
-  if (engine === 'xray') return buildXrayConfig(templates, params)
-  return buildSingboxConfig(templates, params)
+function buildConfigObject(engine, templates, params, node) {
+  if (engine === 'xray') return buildXrayConfig(templates, params, node)
+  return buildSingboxConfig(templates, params, node)
 }
 
-function buildConfigFile(engine, templates, params) {
-  const config = buildConfigObject(engine, templates, params)
+function buildConfigFile(engine, templates, params, node) {
+  const config = buildConfigObject(engine, templates, params, node)
   if (engine === 'xray') {
     return {
       path: 'xray.json',
@@ -637,7 +730,7 @@ function buildConfigFile(engine, templates, params) {
 export function buildNodeConfigPreview({ templates, params = {}, engine, node }) {
   const selectedEngine = normalizeEngine(engine || templates?.[0]?.engine)
   const decoratedTemplates = (templates || []).map((t) => decorateTemplateWithResolvedSettings(t, params, node))
-  const configFile = buildConfigFile(selectedEngine, decoratedTemplates, params || {})
+  const configFile = buildConfigFile(selectedEngine, decoratedTemplates, params || {}, node)
   return {
     engine: selectedEngine,
     config_name: configFile.path,
@@ -695,6 +788,11 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
     summary,
     subscriptionOutbounds,
     createdAt,
+    warpMode: node.warp_enabled ? (node.warp_mode || 'off') : 'off',
+    argoEnabled: node.argo_enabled ? 'true' : 'false',
+    argoToken: String(node.argo_token || ''),
+    argoDomain: String(node.argo_domain || ''),
+    argoPort: String(node.argo_port || '0'),
   })
 
   const files = [
@@ -703,7 +801,7 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
   ]
 
   for (const group of groups) {
-    files.push(buildConfigFile(group.engine, group.templates, params))
+    files.push(buildConfigFile(group.engine, group.templates, params, node))
   }
 
   const bundle = buildBundleText({ rev, engine: selectedEngine, reloadCmd, files })

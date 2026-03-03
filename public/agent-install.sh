@@ -358,6 +358,45 @@ log "Installing official Xray and sing-box binaries (best-effort)..."
 install_xray || true
 install_singbox || true
 
+# ---------- Install cloudflared ----------
+CLOUDFLARED_BIN=""
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  CLOUDFLARED_BIN="${HOME}/.local/bin/cloudflared"
+else
+  CLOUDFLARED_BIN="/usr/local/bin/cloudflared"
+fi
+
+install_cloudflared() {
+  if need_cmd cloudflared || [[ -x "$CLOUDFLARED_BIN" ]]; then
+    log "cloudflared already installed."
+    return 0
+  fi
+
+  local cf_arch=""
+  case "$ARCH" in
+    x86_64|amd64) cf_arch="amd64" ;;
+    aarch64|arm64) cf_arch="arm64" ;;
+    armv7l|armv7) cf_arch="arm" ;;
+    i386|i686) cf_arch="386" ;;
+    *)
+      warn "Unsupported architecture for cloudflared: $ARCH"
+      return 1
+      ;;
+  esac
+
+  local url
+  url="$(wrap_url "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}")"
+
+  log "Downloading cloudflared: $url"
+  mkdir -p "$(dirname "$CLOUDFLARED_BIN")" || true
+  curl -fsSL -o "$CLOUDFLARED_BIN" "$url" || { warn "Failed to download cloudflared"; return 1; }
+  chmod 755 "$CLOUDFLARED_BIN"
+  log "cloudflared installed to: $CLOUDFLARED_BIN"
+}
+
+log "Installing cloudflared (best-effort)..."
+install_cloudflared || true
+
 # ---------- Write config + runner ----------
 CONFIG_FILE="${CONFIG_ROOT}/config.env"
 RUNNER_SCRIPT="${AGENT_ROOT}/agent-runner.sh"
@@ -480,12 +519,37 @@ build_heartbeat_payload() {
   cpu_usage="$(cpu_usage_percent)"
   read -r memory_used memory_total memory_usage <<< "$(memory_stats)"
 
-  local deploy_json protocol_json error_json
+  local deploy_json protocol_json error_json warp_json argo_json argo_domain_json
   deploy_json="$(json_escape "$deploy_info")"
   protocol_json="$(json_escape "$protocol_version")"
   error_json="$(json_escape "$error_message")"
 
-  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage}"
+  # WARP status
+  local warp_status="off"
+  if [[ -f "$STATE_DIR/warp-status" ]]; then
+    warp_status="$(cat "$STATE_DIR/warp-status" 2>/dev/null || echo off)"
+  fi
+  warp_json="$(json_escape "$warp_status")"
+
+  # Argo status
+  local argo_status="off" argo_temp_domain=""
+  local argo_pidfile="$STATE_DIR/cloudflared.pid"
+  if [[ -f "$argo_pidfile" ]]; then
+    local argo_pid
+    argo_pid="$(cat "$argo_pidfile" 2>/dev/null || true)"
+    if [[ -n "$argo_pid" ]] && kill -0 "$argo_pid" 2>/dev/null; then
+      argo_status="running"
+    else
+      argo_status="stopped"
+    fi
+  fi
+  if [[ -f "$STATE_DIR/argo-domain" ]]; then
+    argo_temp_domain="$(cat "$STATE_DIR/argo-domain" 2>/dev/null || true)"
+  fi
+  argo_json="$(json_escape "$argo_status")"
+  argo_domain_json="$(json_escape "$argo_temp_domain")"
+
+  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
 }
 
 heartbeat_once() {
@@ -1071,6 +1135,56 @@ apply_release() {
 
   APPLY_STAGE="cleanup"
   rm -rf "$tmp_dir"
+
+  # ── Argo tunnel lifecycle ──
+  APPLY_STAGE="argo_tunnel"
+  local argo_enabled="" argo_token="" argo_domain="" argo_port=""
+  argo_enabled="$(read_manifest_field "$release_dir" "ARGO_ENABLED")"
+  argo_token="$(read_manifest_field "$release_dir" "ARGO_TOKEN")"
+  argo_domain="$(read_manifest_field "$release_dir" "ARGO_DOMAIN")"
+  argo_port="$(read_manifest_field "$release_dir" "ARGO_PORT")"
+  local argo_pidfile="$STATE_DIR/cloudflared.pid"
+
+  # Stop existing cloudflared
+  if [[ -f "$argo_pidfile" ]]; then
+    local old_pid
+    old_pid="$(cat "$argo_pidfile" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid" 2>/dev/null || true
+      sleep 2
+      kill -9 "$old_pid" 2>/dev/null || true
+    fi
+    rm -f "$argo_pidfile"
+  fi
+  rm -f "$STATE_DIR/argo-domain" "$STATE_DIR/argo.log"
+
+  if [[ "$argo_enabled" == "true" ]] && command -v cloudflared >/dev/null 2>&1; then
+    if [[ -n "$argo_token" ]]; then
+      # Fixed tunnel
+      nohup cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$argo_token" > "$STATE_DIR/argo.log" 2>&1 &
+      echo $! > "$argo_pidfile"
+      [[ -n "$argo_domain" ]] && echo "$argo_domain" > "$STATE_DIR/argo-domain"
+    elif [[ -n "$argo_port" && "$argo_port" -gt 0 ]]; then
+      # Temp tunnel (TryCloudflare)
+      nohup cloudflared tunnel --url http://localhost:${argo_port} --edge-ip-version auto --no-autoupdate --protocol http2 > "$STATE_DIR/argo.log" 2>&1 &
+      echo $! > "$argo_pidfile"
+      # Wait for temp domain to appear in log
+      sleep 8
+      local temp_domain
+      temp_domain="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo.log" 2>/dev/null | head -n1 | sed 's|https://||')"
+      [[ -n "$temp_domain" ]] && echo "$temp_domain" > "$STATE_DIR/argo-domain"
+    fi
+  fi
+
+  # ── WARP status ──
+  local warp_mode=""
+  warp_mode="$(read_manifest_field "$release_dir" "WARP_MODE")"
+  if [[ -n "$warp_mode" && "$warp_mode" != "off" ]]; then
+    echo "active:${warp_mode}" > "$STATE_DIR/warp-status"
+  else
+    echo "off" > "$STATE_DIR/warp-status"
+  fi
+
   echo "APPLY_DETAIL=stage=done; rev=r${rev}; sha256=${actual_sha}; action_sing_box=${action_sing_box}; action_xray=${action_xray}; reload_mode=${reload_mode}; stop_sing_box=${stop_sing_box}; start_sing_box=${start_sing_box}; stop_xray=${stop_xray}; start_xray=${start_xray}"
 }
 

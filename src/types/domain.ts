@@ -81,6 +81,24 @@ export interface NodeRecord {
   last_release_status: 'idle' | 'pending' | 'ok' | 'failed'
   last_release_error_code: string
   last_release_message: string
+
+  // WARP WireGuard exit
+  warp_enabled: boolean
+  warp_mode: 'all' | 'ipv4' | 'ipv6' | 'singbox' | 'xray' | 'off'
+  warp_private_key: string
+  warp_v6: string
+  warp_reserved: number[]
+  warp_endpoint: string
+  warp_status: string            // agent-reported
+
+  // Cloudflare Argo tunnel
+  argo_enabled: boolean
+  argo_token: string             // fixed tunnel token; empty = temp tunnel
+  argo_domain: string            // fixed tunnel domain
+  argo_port: number              // local port cloudflared proxies to
+  argo_status: string            // agent-reported
+  argo_temp_domain: string       // agent-reported temp domain
+
   created_at: string
   updated_at: string
 }

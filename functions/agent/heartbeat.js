@@ -35,6 +35,11 @@ async function applyHeartbeat(node, report, kv) {
     node.memory_total_mb = toMetric(report.memory_total_mb, { min: 0 })
     node.memory_usage_percent = toMetric(report.memory_usage_percent, { min: 0, max: 100 })
     node.heartbeat_reported_at = now
+
+    // WARP / Argo status
+    if (report.warp_status !== undefined) node.warp_status = toText(report.warp_status, 256)
+    if (report.argo_status !== undefined) node.argo_status = toText(report.argo_status, 256)
+    if (report.argo_temp_domain !== undefined) node.argo_temp_domain = toText(report.argo_temp_domain, 256)
   }
 
   await kvPutJson(kv, KEY.node(node.id), node)
@@ -82,6 +87,9 @@ export async function onRequestPost({ request, env }) {
     memory_used_mb: body.memory_used_mb,
     memory_total_mb: body.memory_total_mb,
     memory_usage_percent: body.memory_usage_percent,
+    warp_status: body.warp_status,
+    argo_status: body.argo_status,
+    argo_temp_domain: body.argo_temp_domain,
   }
 
   return applyHeartbeat(auth.node, report, kv)

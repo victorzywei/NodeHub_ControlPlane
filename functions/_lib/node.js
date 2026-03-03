@@ -18,6 +18,24 @@ function toNullableNumber(value) {
   return Number.isFinite(num) ? num : null
 }
 
+function toBool(value) {
+  return value === true || value === 'true'
+}
+
+function toNumberArray(values) {
+  if (!Array.isArray(values)) return []
+  return values.map((v) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : 0
+  })
+}
+
+function toPort(value, fallback = 0) {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 0 || num > 65535) return fallback
+  return Math.floor(num)
+}
+
 function toVersion(value) {
   return Number(value || 0) || 0
 }
@@ -67,6 +85,24 @@ export function normalizeNode(node) {
     last_release_error_code: toString(node.last_release_error_code),
     last_release_status: toString(node.last_release_status || 'idle'),
     last_release_message: toString(node.last_release_message),
+
+    // WARP
+    warp_enabled: toBool(node.warp_enabled),
+    warp_mode: toString(node.warp_mode) || 'off',
+    warp_private_key: toString(node.warp_private_key),
+    warp_v6: toString(node.warp_v6),
+    warp_reserved: toNumberArray(node.warp_reserved),
+    warp_endpoint: toString(node.warp_endpoint) || 'engage.cloudflareclient.com',
+    warp_status: toString(node.warp_status),
+
+    // Argo
+    argo_enabled: toBool(node.argo_enabled),
+    argo_token: toString(node.argo_token),
+    argo_domain: toString(node.argo_domain),
+    argo_port: toPort(node.argo_port, 0),
+    argo_status: toString(node.argo_status),
+    argo_temp_domain: toString(node.argo_temp_domain),
+
     online,
   }
 }
