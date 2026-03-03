@@ -116,6 +116,7 @@ describe('format utilities', () => {
       defaults: {
         port: 49443,
         server_name: 'gateway.icloud.com',
+        dest: 'www.hsbc.com.hk:443',
         reality_private_key: 'test-private-key',
         reality_short_id: '60ecf95c05576710',
       },

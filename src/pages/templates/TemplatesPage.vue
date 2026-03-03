@@ -142,6 +142,11 @@ function canGenerateSingleSecret(key: string): boolean {
   return key !== 'reality_private_key' && key !== 'reality_public_key'
 }
 
+function canGenerateRealityPairAtField(key: string): boolean {
+  if (key !== 'reality_private_key') return false
+  return hasField('reality_private_key') && hasField('reality_public_key')
+}
+
 async function regenRealityKeyPair(force = true, notify = true): Promise<void> {
   if (!hasField('reality_private_key') || !hasField('reality_public_key')) return
   if (generatingRealityPair.value) return
@@ -486,11 +491,6 @@ onMounted(loadData)
 
     <article class="panel panel-pad" style="display: grid; gap: 10px">
       <strong>细节参数</strong>
-      <div v-if="hasField('reality_private_key') && hasField('reality_public_key')" style="display: flex; justify-content: flex-end">
-        <button class="btn btn-secondary" type="button" :disabled="generatingRealityPair" @click="regenRealityKeyPair(true, true)">
-          {{ generatingRealityPair ? '生成中...' : '生成 Reality 密钥对' }}
-        </button>
-      </div>
 
       <label v-for="field in allParamFields" :key="field.key" style="display: grid; gap: 6px">
         <span style="font-weight: 700">{{ field.label }}</span>
@@ -520,6 +520,15 @@ onMounted(loadData)
             @click="regenSecret(field.key)"
           >
             生成
+          </button>
+          <button
+            v-else-if="canGenerateRealityPairAtField(field.key)"
+            class="btn btn-secondary"
+            type="button"
+            :disabled="generatingRealityPair"
+            @click="regenRealityKeyPair(true, true)"
+          >
+            {{ generatingRealityPair ? '生成中...' : '生成 Reality 密钥对' }}
           </button>
         </div>
       </label>

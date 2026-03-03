@@ -59,43 +59,9 @@ function requireField(name, value) {
   throw new Error(`missing required field: ${name}`)
 }
 
-function parseHostPort(value) {
-  const raw = text(value)
-  if (!raw) return null
-  const parsePort = (input) => {
-    const parsed = Math.floor(num(input, 443))
-    if (parsed < 1 || parsed > 65535) return 443
-    return parsed
-  }
-
-  // Bracketed IPv6, e.g. [2606:4700::1111]:443
-  const ipv6Match = raw.match(/^\[([^\]]+)\](?::(\d+))?$/)
-  if (ipv6Match) {
-    const port = parsePort(ipv6Match[2])
-    return { host: text(ipv6Match[1]), port }
-  }
-
-  // host:port where host itself does not contain ':'
-  const hostPortMatch = raw.match(/^([^:]+):(\d+)$/)
-  if (hostPortMatch) {
-    const port = parsePort(hostPortMatch[2])
-    return { host: text(hostPortMatch[1]), port }
-  }
-
-  // Plain host without port
-  return { host: raw, port: 443 }
-}
-
-function resolveRealityHandshake(settings, fallbackServerName) {
-  const fromDest = parseHostPort(settings.dest)
-  if (fromDest?.host) {
-    return {
-      server: fromDest.host,
-      server_port: fromDest.port,
-    }
-  }
+function resolveRealityHandshake(serverName) {
   return {
-    server: text(fallbackServerName || 'www.cloudflare.com'),
+    server: text(serverName || 'www.cloudflare.com'),
     server_port: 443,
   }
 }
@@ -232,7 +198,7 @@ function applyTlsForSingbox(template, settings) {
   if (tlsMode === 'reality') {
     const serverName = text(settings.server_name || settings.sni || settings.host || 'www.cloudflare.com')
     const shortId = text(settings.reality_short_id || settings.short_id)
-    const handshake = resolveRealityHandshake(settings, serverName)
+    const handshake = resolveRealityHandshake(serverName)
     return {
       enabled: true,
       server_name: serverName,
