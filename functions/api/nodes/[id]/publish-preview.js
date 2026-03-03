@@ -34,11 +34,11 @@ export async function onRequestPost({ request, env, params }) {
   for (const id of requestedTemplateIds) {
     const template = await resolveTemplateForApply(kv, id)
     if (!template) {
-      validationErrors.push(`template not found: ${id}`)
+      // Historical template ids may remain on node after template deletion.
+      // Ignore them in preview so legacy references don't block current publish flow.
       continue
     }
     if (!normalizeTemplateNodeTypes(template.node_types).includes(node.node_type)) {
-      validationErrors.push(`template ${template.name || id} does not support node type ${node.node_type}`)
       continue
     }
     if (!supportsTemplateCombination(template.engine, template.protocol, template.transport, template.tls_mode)) {

@@ -139,21 +139,23 @@ export async function resolveTemplatesForNode(kv, nodeType, templateIds) {
 
 export async function resolveTemplatesForPreview(kv, nodeType, templateIds) {
   const ids = normalizeNodeTemplateIds(templateIds)
+  const acceptedIds = []
   const templates = []
 
   for (const id of ids) {
     const template = await resolveTemplateForApply(kv, id)
     if (!template) {
-      throw new Error(`template not found: ${id}`)
+      continue
     }
     if (!normalizeTemplateNodeTypes(template.node_types).includes(nodeType)) {
-      throw new Error(`template ${template.name || id} does not support node type ${nodeType}`)
+      continue
     }
     if (!supportsTemplateCombinationForApply(template.engine, template.protocol, template.transport, template.tls_mode)) {
       throw new Error(
         `template ${template.name || id} has unsupported protocol/tls/transport combination: ${template.protocol}/${template.tls_mode}/${template.transport}`,
       )
     }
+    acceptedIds.push(id)
     templates.push(template)
   }
 
@@ -168,7 +170,7 @@ export async function resolveTemplatesForPreview(kv, nodeType, templateIds) {
   const groups = Array.from(groupsMap.entries()).map(([engine, rows]) => ({ engine, templates: rows }))
 
   return {
-    ids,
+    ids: acceptedIds,
     templates,
     groups,
   }

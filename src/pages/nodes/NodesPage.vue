@@ -81,8 +81,67 @@ const filteredRows = computed(() => {
 const publishAvailableTemplates = computed(() => {
   const node = publishNode.value
   if (!node) return []
-  return templates.value.filter((item) => item.node_types.includes(node.node_type))
+  return templates.value.filter((item) => item.node_types.includes(node.node_type) && isTemplatePublishable(item))
 })
+
+const PROTOCOL_TLS_SUPPORT: Record<string, string[]> = {
+  vless: ['none', 'tls', 'reality'],
+  trojan: ['tls'],
+  vmess: ['none', 'tls'],
+  hysteria2: ['tls'],
+  shadowsocks2022: ['none'],
+}
+
+const PROTOCOL_TRANSPORT_SUPPORT: Record<string, string[]> = {
+  vless: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
+  trojan: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
+  vmess: ['tcp', 'mkcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'h2'],
+  hysteria2: ['udp'],
+  shadowsocks2022: ['tcp', 'udp'],
+}
+
+function supportsProtocolTls(protocol: string, tlsMode: string): boolean {
+  const allowed = PROTOCOL_TLS_SUPPORT[String(protocol || '').trim().toLowerCase()]
+  if (!allowed) return false
+  return allowed.includes(String(tlsMode || '').trim().toLowerCase())
+}
+
+function supportsProtocolTransport(protocol: string, transport: string): boolean {
+  const allowed = PROTOCOL_TRANSPORT_SUPPORT[String(protocol || '').trim().toLowerCase()]
+  if (!allowed) return false
+  return allowed.includes(String(transport || '').trim().toLowerCase())
+}
+
+function supportsTemplateCombination(engine: string, protocol: string, transport: string, tlsMode: string): boolean {
+  const e = String(engine || '').trim().toLowerCase()
+  const p = String(protocol || '').trim().toLowerCase()
+  const t = String(transport || '').trim().toLowerCase()
+  const tls = String(tlsMode || '').trim().toLowerCase()
+
+  if (!supportsProtocolTls(p, tls) || !supportsProtocolTransport(p, t)) return false
+  if (e !== 'xray' && (t === 'mkcp' || t === 'xhttp')) return false
+
+  if (tls === 'reality') {
+    if (p !== 'vless') return false
+    if (e === 'xray') return t === 'tcp' || t === 'grpc' || t === 'xhttp'
+    return t === 'tcp' || t === 'grpc'
+  }
+
+  return true
+}
+
+function isTemplatePublishable(template: TemplateRecord): boolean {
+  return supportsTemplateCombination(template.engine, template.protocol, template.transport, template.tls_mode)
+}
+
+function sanitizePublishTemplateIds(ids: string[], nodeType: NodeKind): string[] {
+  const allowed = new Set(
+    templates.value
+      .filter((item) => item.node_types.includes(nodeType) && isTemplatePublishable(item))
+      .map((item) => item.id),
+  )
+  return ids.filter((id) => allowed.has(id))
+}
 
 function toPayload(): Partial<NodeRecord> {
   return {
@@ -156,7 +215,9 @@ function startEdit(node: NodeRecord): void {
 
 function startPublish(node: NodeRecord): void {
   publishNode.value = node
-  publishTemplateIds.value = Array.isArray(node.applied_template_ids) ? [...node.applied_template_ids] : []
+  const initialIds = Array.isArray(node.applied_template_ids) ? [...node.applied_template_ids] : []
+  const sanitizedIds = sanitizePublishTemplateIds(initialIds, node.node_type)
+  publishTemplateIds.value = sanitizedIds
   publishPreview.value = null
   publishPreviewError.value = ''
   publishOpen.value = true
@@ -166,6 +227,8 @@ function startPublish(node: NodeRecord): void {
 async function refreshPublishPreview(): Promise<void> {
   if (!publishNode.value) return
 
+  publishTemplateIds.value = sanitizePublishTemplateIds(publishTemplateIds.value, publishNode.value.node_type)
+
   const seq = ++publishPreviewSeq
   publishPreviewLoading.value = true
   publishPreviewError.value = ''
@@ -174,6 +237,7 @@ async function refreshPublishPreview(): Promise<void> {
     const preview = await previewNodePublish(publishNode.value.id, publishTemplateIds.value)
     if (seq !== publishPreviewSeq) return
     publishPreview.value = preview
+    publishTemplateIds.value = Array.isArray(preview.applied_template_ids) ? [...preview.applied_template_ids] : []
   } catch (error) {
     if (seq !== publishPreviewSeq) return
     publishPreview.value = null
@@ -197,6 +261,7 @@ function togglePublishTemplate(id: string): void {
 
 async function publishTemplatesForNode(): Promise<void> {
   if (!publishNode.value) return
+  publishTemplateIds.value = sanitizePublishTemplateIds(publishTemplateIds.value, publishNode.value.node_type)
   if (publishPreview.value && !publishPreview.value.publishable) {
     toastStore.push(publishPreview.value.publish_message || '当前选择无法直接发布', 'warning')
     return
@@ -293,9 +358,10 @@ function formatMemorySummary(node: NodeRecord): string {
 
 function appliedTemplatesText(node: NodeRecord): string {
   if (!Array.isArray(node.applied_template_ids) || node.applied_template_ids.length === 0) return '-'
-  return node.applied_template_ids
-    .map((id) => templateNameMap.value.get(id) || id)
-    .join(', ')
+  const names = node.applied_template_ids
+    .map((id) => templateNameMap.value.get(id))
+    .filter((item): item is string => Boolean(item))
+  return names.length > 0 ? names.join(', ') : '-'
 }
 
 function releaseVersion(node: NodeRecord): number {
