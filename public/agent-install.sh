@@ -735,15 +735,30 @@ APPLY_ACTION_SING_BOX=""
 APPLY_ACTION_XRAY=""
 
 fail_with() {
-  local code="$1" msg="$2"
+  local code="$1" msg="$2" extra_detail="${3:-}"
   local detail="stage=${APPLY_STAGE}; rev=r${TARGET_REV}"
   [[ -n "$APPLY_ACTION_SING_BOX" ]] && detail="${detail}; action_sing_box=${APPLY_ACTION_SING_BOX}"
   [[ -n "$APPLY_ACTION_XRAY" ]] && detail="${detail}; action_xray=${APPLY_ACTION_XRAY}"
   [[ -n "$RELOAD_CMD" ]] && detail="${detail}; reload_cmd=${RELOAD_CMD}"
+  [[ -n "$extra_detail" ]] && detail="${detail}; ${extra_detail}"
   echo "ERROR_CODE=$code"
   echo "ERROR_MESSAGE=$msg"
   echo "ERROR_DETAIL=$detail"
   exit 1
+}
+
+summarize_command_output() {
+  local raw="$1"
+  local summary=""
+  summary="$(
+    printf '%s\n' "$raw" \
+      | tr '\r' '\n' \
+      | awk 'NF { gsub(/[[:space:]]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }' \
+      | head -n 8 \
+      | paste -sd ' || ' -
+  )"
+  [[ -n "$summary" ]] || summary="(no output)"
+  printf '%s' "${summary:0:1200}"
 }
 
 calc_sha256_file() {
@@ -916,21 +931,32 @@ start_protocol_engine() {
 
 validate_release_engine() {
   local engine="$1" release_dir="$2"
+  local check_cmd="" check_output="" rc=0 output_summary=""
   if [[ "$engine" == "sing-box" ]]; then
-    [[ -f "$release_dir/sing-box.json" ]] || fail_with "E_VALIDATE" "sing-box.json missing"
+    [[ -f "$release_dir/sing-box.json" ]] || fail_with "E_VALIDATE" "sing-box.json missing" "engine=sing-box; file=${release_dir}/sing-box.json"
     replace_token_file "__NODEHUB_CERT_CRT__" "$CERT_CRT" "$release_dir/sing-box.json"
     replace_token_file "__NODEHUB_CERT_KEY__" "$CERT_KEY" "$release_dir/sing-box.json"
-    command -v sing-box >/dev/null 2>&1 || fail_with "E_VALIDATE" "sing-box binary missing"
-    sing-box check -c "$release_dir/sing-box.json" >/dev/null 2>&1 || fail_with "E_VALIDATE" "sing-box config check failed"
+    command -v sing-box >/dev/null 2>&1 || fail_with "E_VALIDATE" "sing-box binary missing" "engine=sing-box; command=sing-box"
+    check_cmd="sing-box check -c \"$release_dir/sing-box.json\""
+    check_output="$(sh -lc "$check_cmd" 2>&1)" && rc=0 || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      output_summary="$(summarize_command_output "$check_output")"
+      fail_with "E_VALIDATE" "sing-box config check failed" "engine=sing-box; cmd=${check_cmd}; exit_code=${rc}; output=${output_summary}"
+    fi
     return 0
   fi
 
   if [[ "$engine" == "xray" ]]; then
-    [[ -f "$release_dir/xray.json" ]] || fail_with "E_VALIDATE" "xray.json missing"
+    [[ -f "$release_dir/xray.json" ]] || fail_with "E_VALIDATE" "xray.json missing" "engine=xray; file=${release_dir}/xray.json"
     replace_token_file "__NODEHUB_CERT_CRT__" "$CERT_CRT" "$release_dir/xray.json"
     replace_token_file "__NODEHUB_CERT_KEY__" "$CERT_KEY" "$release_dir/xray.json"
-    command -v xray >/dev/null 2>&1 || fail_with "E_VALIDATE" "xray binary missing"
-    xray run -test -config "$release_dir/xray.json" >/dev/null 2>&1 || fail_with "E_VALIDATE" "xray config check failed"
+    command -v xray >/dev/null 2>&1 || fail_with "E_VALIDATE" "xray binary missing" "engine=xray; command=xray"
+    check_cmd="xray run -test -config \"$release_dir/xray.json\""
+    check_output="$(sh -lc "$check_cmd" 2>&1)" && rc=0 || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      output_summary="$(summarize_command_output "$check_output")"
+      fail_with "E_VALIDATE" "xray config check failed" "engine=xray; cmd=${check_cmd}; exit_code=${rc}; output=${output_summary}"
+    fi
     return 0
   fi
 
