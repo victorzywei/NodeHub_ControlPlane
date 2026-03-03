@@ -109,6 +109,7 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
 
     fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'select', valueType: 'string', options: REALITY_SNI_OPTIONS, defaultValue: randomSni, optional: true })
     fields.push({ key: 'reality_private_key', label: 'Reality Private Key', type: 'password', valueType: 'string', secret: true })
+    fields.push({ key: 'reality_public_key', label: 'Reality Public Key', type: 'password', valueType: 'string', secret: true })
     fields.push({ key: 'reality_short_id', label: 'Reality Short ID', type: 'password', valueType: 'string', secret: true })
 
     if (engine === 'xray') {

@@ -27,6 +27,7 @@ export const BUILTIN_TEMPLATES = [
       flow: 'xtls-rprx-vision',
       server_name: '',
       reality_private_key: '',
+      reality_public_key: '',
       reality_short_id: '',
     },
   },
