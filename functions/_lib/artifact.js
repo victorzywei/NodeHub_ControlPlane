@@ -71,10 +71,15 @@ function resolveRequiredValue(settings, keys, generator) {
 
 function toUser(template, settings) {
   const protocol = text(template.protocol).toLowerCase()
-  if (protocol === 'vless' || protocol === 'vmess') {
+  if (protocol === 'vless') {
     return {
       uuid: resolveRequiredValue(settings, ['uuid', 'user_id', 'id'], randomUuid),
       flow: text(settings.flow) || undefined,
+    }
+  }
+  if (protocol === 'vmess') {
+    return {
+      uuid: resolveRequiredValue(settings, ['uuid', 'user_id', 'id'], randomUuid),
       alter_id: Math.max(0, Math.floor(num(settings.alter_id, 0))),
     }
   }
@@ -107,7 +112,10 @@ function normalizeTemplateSettings(template, sourceSettings, node) {
   if (protocol === 'vless' || protocol === 'vmess') {
     const user = toUser(template, settings)
     settings.uuid = user.uuid
-    if (protocol === 'vless' && user.flow && !text(settings.flow)) {
+    if (protocol === 'vless' && transport !== 'tcp') {
+      // Flow is only meaningful for VLESS over plain TCP/raw branches.
+      delete settings.flow
+    } else if (protocol === 'vless' && user.flow && !text(settings.flow)) {
       settings.flow = user.flow
     }
     if (protocol === 'vmess') {

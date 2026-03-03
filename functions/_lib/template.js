@@ -96,7 +96,9 @@ export function applyTemplateAutoDefaults({ protocol, transport, tlsMode, defaul
   }
 
   if (p === 'vless' && tls === 'reality') {
-    ensureValue(next, 'flow', () => 'xtls-rprx-vision')
+    // Vision flow should only be prefilled for TCP/raw branch.
+    if (t === 'tcp') ensureValue(next, 'flow', () => 'xtls-rprx-vision')
+    else if (!isEmptyValue(next.flow)) delete next.flow
     ensureValue(next, 'server_name', () => '')
     next.reality_private_key = normalizeRealityPrivateKey(next.reality_private_key)
     ensureValue(next, 'reality_short_id', () => randomHex(8))
