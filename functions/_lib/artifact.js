@@ -414,10 +414,11 @@ function buildXrayStreamSettings(template, settings) {
   } else if (tlsMode === 'reality') {
     const serverName = text(settings.server_name || settings.sni || settings.host || 'www.cloudflare.com')
     const shortId = text(settings.reality_short_id || settings.short_id)
+    const realityDest = `${serverName}:443`
     stream.security = 'reality'
     stream.realitySettings = {
       show: false,
-      dest: text(settings.dest || `${serverName}:443`),
+      dest: realityDest,
       xver: 0,
       serverNames: [serverName],
       privateKey: requireField('reality_private_key', settings.reality_private_key || settings.private_key),

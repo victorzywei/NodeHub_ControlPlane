@@ -157,5 +157,50 @@ describe('format utilities', () => {
     expect(keys).toContain('reality_private_key')
     expect(keys).toContain('reality_public_key')
     expect(keys).toContain('reality_short_id')
+    expect(keys).not.toContain('dest')
+  })
+
+  it('uses server_name as xray reality dest', async () => {
+    const template = {
+      id: 'tpl_xray_vless_reality_tcp',
+      name: 'Xray VLESS + Reality + TCP',
+      engine: 'xray',
+      protocol: 'vless',
+      transport: 'tcp',
+      tls_mode: 'reality',
+      defaults: {
+        port: 49443,
+        server_name: 'gateway.icloud.com',
+        dest: 'www.hsbc.com.hk:443',
+        reality_private_key: 'test-private-key',
+        reality_short_id: '60ecf95c05576710',
+      },
+    }
+
+    const artifact = await buildNodeArtifactBundle({
+      node: { id: 'node-3' },
+      rev: 3,
+      operationId: 'op-3',
+      templates: [template],
+      templateGroups: [{ engine: 'xray', templates: [template] }],
+      params: {},
+      createdAt: '2026-03-02T00:00:00.000Z',
+      engine: 'xray',
+    })
+
+    const files = parseBundleFiles(artifact.bundle)
+    const config = JSON.parse(files['xray.json']) as {
+      inbounds?: Array<{
+        streamSettings?: {
+          realitySettings?: {
+            dest?: string
+            serverNames?: string[]
+          }
+        }
+      }>
+    }
+
+    expect(config.inbounds?.[0]?.streamSettings?.realitySettings?.serverNames?.[0]).toBe('gateway.icloud.com')
+    expect(config.inbounds?.[0]?.streamSettings?.realitySettings?.dest).toBe('gateway.icloud.com:443')
   })
 })

@@ -359,21 +359,6 @@ watch(
   }
 )
 
-watch(
-  () => defaultsForm.server_name,
-  (newServerName) => {
-    if (editorOpen.value && form.tls_mode === 'reality' && newServerName !== undefined) {
-      if (form.engine === 'xray') {
-        if (!newServerName) {
-          defaultsForm.dest = ''
-        } else if (!defaultsForm.dest || defaultsForm.dest.includes(newServerName) || defaultsForm.dest === ':443') {
-          defaultsForm.dest = `${newServerName}:443`
-        }
-      }
-    }
-  }
-)
-
 onMounted(loadData)
 </script>
 

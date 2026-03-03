@@ -147,9 +147,6 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
     fields.push({ key: 'reality_public_key', label: 'Reality Public Key', type: 'password', valueType: 'string', secret: true })
     fields.push({ key: 'reality_short_id', label: 'Reality Short ID', type: 'password', valueType: 'string', secret: true })
 
-    if (engine === 'xray') {
-      fields.push({ key: 'dest', label: 'Reality Dest', type: 'text', valueType: 'string', placeholder: 'example.com:443', defaultValue: `${randomSni}:443`, optional: true })
-    }
   } else if (tlsMode === 'tls') {
     fields.push({ key: 'sni', label: 'SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '', optional: true })
   }
