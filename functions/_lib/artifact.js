@@ -474,21 +474,33 @@ function resolveWarpRoute(templates, node) {
 function buildSingboxConfig(templates, params, node) {
   const inbounds = templates.map((tpl, idx) => buildSingboxInbound(tpl, params, idx))
   const outbounds = [{ type: 'direct', tag: 'direct' }]
+  const endpoints = []
   const route = { final: 'direct' }
 
   const warp = resolveWarpRoute(templates, node)
   if (warp) {
-    outbounds.push({
+    endpoints.push({
       type: 'wireguard',
-      tag: 'warp-out',
-      server: warp.server,
-      server_port: warp.serverPort,
-      local_address: warp.localAddress,
-      private_key: warp.privateKey,
-      peer_public_key: warp.peerPublicKey,
-      reserved: warp.reserved,
-      system_interface: warp.systemInterface,
+      tag: 'warp-ep',
+      system: warp.systemInterface,
       mtu: warp.mtu,
+      address: warp.localAddress,
+      private_key: warp.privateKey,
+      peers: [
+        {
+          address: warp.server,
+          port: warp.serverPort,
+          public_key: warp.peerPublicKey,
+          allowed_ips: ['0.0.0.0/0', '::/0'],
+          persistent_keepalive_interval: 30,
+          reserved: warp.reserved,
+        },
+      ],
+    })
+    outbounds.push({
+      type: 'direct',
+      tag: 'warp-out',
+      detour: 'warp-ep',
     })
     route.rules = [
       { action: 'sniff' },
@@ -499,6 +511,7 @@ function buildSingboxConfig(templates, params, node) {
 
   return {
     log: { level: 'info', timestamp: true },
+    ...(endpoints.length > 0 ? { endpoints } : {}),
     inbounds,
     outbounds,
     route,
