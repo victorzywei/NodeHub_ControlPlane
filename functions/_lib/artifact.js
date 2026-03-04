@@ -472,6 +472,34 @@ function resolveWarpRouteCidrs(value) {
   return ['0.0.0.0/0', '::/0']
 }
 
+function isIpv4Address(value) {
+  const raw = text(value)
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(raw)) return false
+  return raw.split('.').every((part) => {
+    const n = Number(part)
+    return Number.isInteger(n) && n >= 0 && n <= 255
+  })
+}
+
+function isIpv6Address(value) {
+  const raw = text(value)
+  if (!raw || !raw.includes(':')) return false
+  if (!/^[0-9a-fA-F:]+$/.test(raw)) return false
+  return true
+}
+
+function buildWarpEndpointBypassRule(server) {
+  const host = text(server)
+  if (!host) return null
+  if (isIpv4Address(host)) {
+    return { ip_cidr: [`${host}/32`], outbound: 'direct' }
+  }
+  if (isIpv6Address(host)) {
+    return { ip_cidr: [`${host}/128`], outbound: 'direct' }
+  }
+  return { domain: [host], outbound: 'direct' }
+}
+
 function resolveWarpRoute(templates, node) {
   const primaryTemplate = (templates || []).find((t) => t.warp_exit === true || t.defaults?.warp_exit === true)
   if (!primaryTemplate) return null
@@ -524,6 +552,7 @@ function buildSingboxConfig(templates, params, node) {
 
   const warp = resolveWarpRoute(templates, node)
   if (warp) {
+    const endpointBypassRule = buildWarpEndpointBypassRule(warp.server)
     endpoints.push({
       type: 'wireguard',
       tag: 'warp-ep',
@@ -545,6 +574,7 @@ function buildSingboxConfig(templates, params, node) {
     route.rules = [
       { action: 'sniff' },
       { action: 'resolve', strategy: 'prefer_ipv4' },
+      ...(endpointBypassRule ? [endpointBypassRule] : []),
       // In sing-box >= 1.11, endpoint tags can be used as route outbounds directly.
       { ip_cidr: warp.ipCidrs, outbound: 'warp-ep' },
     ]
