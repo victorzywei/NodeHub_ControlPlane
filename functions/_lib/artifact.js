@@ -500,6 +500,29 @@ function buildWarpEndpointBypassRule(server) {
   return { domain: [host], outbound: 'direct' }
 }
 
+function inboundTagSuffix(protocol) {
+  const normalized = text(protocol).toLowerCase()
+  if (normalized === 'vless') return 'vless'
+  if (normalized === 'trojan') return 'trojan'
+  if (normalized === 'vmess') return 'vmess'
+  if (normalized === 'hysteria2') return 'hysteria2'
+  if (normalized === 'shadowsocks2022') return 'ss2022'
+  return ''
+}
+
+function resolveInboundTagsByWarp(templates) {
+  const result = { warpTags: [], directTags: [] }
+  ;(templates || []).forEach((template, idx) => {
+    const suffix = inboundTagSuffix(template?.protocol)
+    if (!suffix) return
+    const tag = `in-${idx + 1}-${suffix}`
+    const useWarp = template?.warp_exit === true || template?.defaults?.warp_exit === true
+    if (useWarp) result.warpTags.push(tag)
+    else result.directTags.push(tag)
+  })
+  return result
+}
+
 function resolveWarpRoute(templates, node) {
   const primaryTemplate = (templates || []).find((t) => t.warp_exit === true || t.defaults?.warp_exit === true)
   if (!primaryTemplate) return null
@@ -552,7 +575,24 @@ function buildSingboxConfig(templates, params, node) {
 
   const warp = resolveWarpRoute(templates, node)
   if (warp) {
+    const inboundTags = resolveInboundTagsByWarp(templates)
     const endpointBypassRule = buildWarpEndpointBypassRule(warp.server)
+    const rules = [
+      { action: 'sniff' },
+      { action: 'resolve', strategy: 'prefer_ipv4' },
+      ...(endpointBypassRule ? [endpointBypassRule] : []),
+    ]
+    if (inboundTags.warpTags.length > 0) {
+      // Route only WARP-enabled template inbounds through WARP.
+      rules.push({ inbound: inboundTags.warpTags, ip_cidr: warp.ipCidrs, outbound: 'warp-ep' })
+    } else {
+      rules.push({ ip_cidr: warp.ipCidrs, outbound: 'warp-ep' })
+    }
+    if (inboundTags.directTags.length > 0) {
+      // Force non-WARP templates to direct, independent of global IP rules.
+      rules.push({ inbound: inboundTags.directTags, outbound: 'direct' })
+    }
+
     endpoints.push({
       type: 'wireguard',
       tag: 'warp-ep',
@@ -571,13 +611,7 @@ function buildSingboxConfig(templates, params, node) {
         },
       ],
     })
-    route.rules = [
-      { action: 'sniff' },
-      { action: 'resolve', strategy: 'prefer_ipv4' },
-      ...(endpointBypassRule ? [endpointBypassRule] : []),
-      // In sing-box >= 1.11, endpoint tags can be used as route outbounds directly.
-      { ip_cidr: warp.ipCidrs, outbound: 'warp-ep' },
-    ]
+    route.rules = rules
   }
 
   return {
@@ -766,6 +800,7 @@ function buildXrayConfig(templates, params, node) {
 
   const warp = resolveWarpRoute(templates, node)
   if (warp) {
+    const inboundTags = resolveInboundTagsByWarp(templates)
     const warpEndpoint = `${warp.server}:${warp.serverPort}`
     outbounds.push({
       tag: 'x-warp-out',
@@ -790,9 +825,21 @@ function buildXrayConfig(templates, params, node) {
       proxySettings: { tag: 'x-warp-out' },
     })
     routing.domainStrategy = 'IPOnDemand'
-    routing.rules = [
-      { type: 'field', ip: warp.ipCidrs, network: 'tcp,udp', outboundTag: 'warp-out' },
-    ]
+    routing.rules = []
+    if (inboundTags.warpTags.length > 0) {
+      routing.rules.push({
+        type: 'field',
+        inboundTag: inboundTags.warpTags,
+        ip: warp.ipCidrs,
+        network: 'tcp,udp',
+        outboundTag: 'warp-out',
+      })
+    } else {
+      routing.rules.push({ type: 'field', ip: warp.ipCidrs, network: 'tcp,udp', outboundTag: 'warp-out' })
+    }
+    if (inboundTags.directTags.length > 0) {
+      routing.rules.push({ type: 'field', inboundTag: inboundTags.directTags, outboundTag: 'direct' })
+    }
   }
 
   return { log: { loglevel: 'warning' }, inbounds, outbounds, routing }
