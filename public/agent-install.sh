@@ -70,9 +70,10 @@ sedi() {
 }
 
 # URL join for optional mirror that expects: MIRROR/https://github.com/...
+# Only GitHub download URLs use mirror; non-GitHub URLs stay direct.
 wrap_url() {
   local url="$1"
-  if [[ -n "$GITHUB_MIRROR" ]]; then
+  if [[ -n "$GITHUB_MIRROR" && "$url" == https://github.com/* ]]; then
     printf '%s/%s' "${GITHUB_MIRROR%/}" "$url"
   else
     printf '%s' "$url"
@@ -409,8 +410,8 @@ install_cloudflared() {
   esac
 
   local url
-  # Cloudflared must be fetched from official upstream binary release.
-  url="$(direct_url "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}")"
+  # GitHub downloads use mirror if configured.
+  url="$(wrap_url "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}")"
 
   log "Downloading cloudflared: $url"
   mkdir -p "$(dirname "$CLOUDFLARED_BIN")" || true
