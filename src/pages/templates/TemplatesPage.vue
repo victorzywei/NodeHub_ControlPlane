@@ -17,7 +17,13 @@ interface EditorParamField extends TemplateParamField {
 }
 
 const toastStore = useToastStore()
+const DEFAULT_WARP_SERVER = 'engage.cloudflareclient.com'
+const DEFAULT_WARP_SERVER_PORT = 2408
+const DEFAULT_WARP_LOCAL_ADDRESS_IPV4 = '172.16.0.2/32'
 const DEFAULT_WARP_PEER_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
+const DEFAULT_WARP_SYSTEM_INTERFACE = 'false'
+const DEFAULT_WARP_MTU = 1280
+const DEFAULT_WARP_RESERVED = '0,0,0'
 
 const loading = ref(false)
 const keyword = ref('')
@@ -107,21 +113,21 @@ const warpParamFields = computed<EditorParamField[]>(() => {
       label: 'Server',
       type: 'text',
       valueType: 'string',
-      defaultValue: 'engage.cloudflareclient.com',
+      defaultValue: DEFAULT_WARP_SERVER,
     },
     {
       key: 'warp_server_port',
       label: 'Server Port',
       type: 'number',
       valueType: 'number',
-      defaultValue: 2408,
+      defaultValue: DEFAULT_WARP_SERVER_PORT,
     },
     {
       key: 'warp_local_address_ipv4',
       label: 'Local Address IPv4',
       type: 'text',
       valueType: 'string',
-      defaultValue: '172.16.0.2/32',
+      defaultValue: DEFAULT_WARP_LOCAL_ADDRESS_IPV4,
     },
     {
       key: 'warp_local_address_ipv6',
@@ -157,21 +163,21 @@ const warpParamFields = computed<EditorParamField[]>(() => {
         { value: 'false', label: 'false' },
         { value: 'true', label: 'true' },
       ],
-      defaultValue: 'false',
+      defaultValue: DEFAULT_WARP_SYSTEM_INTERFACE,
     },
     {
       key: 'warp_mtu',
       label: 'MTU',
       type: 'number',
       valueType: 'number',
-      defaultValue: 1280,
+      defaultValue: DEFAULT_WARP_MTU,
     },
     {
       key: 'warp_reserved',
       label: 'Reserved',
       type: 'text',
       valueType: 'string',
-      defaultValue: '0,0,0',
+      defaultValue: DEFAULT_WARP_RESERVED,
       optional: true,
       placeholder: '示例: 0,0,0',
     },
@@ -180,10 +186,6 @@ const warpParamFields = computed<EditorParamField[]>(() => {
 
 const defaultsParamFields = computed<EditorParamField[]>(() => {
   return [...presetParamFields.value, ...warpParamFields.value]
-})
-
-const allParamFields = computed<EditorParamField[]>(() => {
-  return presetParamFields.value
 })
 
 const warpCandidateNodes = computed<NodeRecord[]>(() => {
@@ -229,7 +231,7 @@ function syncDefaultsForm(source: Record<string, unknown>): void {
 }
 
 function hasField(key: string): boolean {
-  return allParamFields.value.some((field) => field.key === key)
+  return presetParamFields.value.some((field) => field.key === key)
 }
 
 function canGenerateSingleField(field: EditorParamField): boolean {
@@ -267,20 +269,18 @@ async function regenRealityKeyPair(force = true, notify = true): Promise<void> {
 function buildDefaultsPayload(): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   const payloadFields = form.warp_exit ? defaultsParamFields.value : presetParamFields.value
-  const fieldMap = new Map(payloadFields.map((field) => [field.key, field]))
 
   payloadFields.forEach((field) => {
     const key = field.key
     const rawValue = defaultsForm[key]
     const value = String(rawValue ?? '')
-    const currentField = fieldMap.get(key)
 
     if (value.trim() === '') {
-      if (currentField?.optional) result[key] = ''
+      if (field.optional) result[key] = ''
       return
     }
 
-    if (currentField?.valueType === 'number') {
+    if (field.valueType === 'number') {
       const num = Number(value)
       result[key] = Number.isFinite(num) ? num : value
       return
@@ -351,11 +351,17 @@ function openEdit(template: TemplateRecord): void {
 function parseWarpEndpoint(rawEndpoint: string): { host: string; port: string } {
   const raw = String(rawEndpoint || '').trim()
   if (!raw) return { host: '', port: '' }
-  const parts = raw.split(':')
-  if (parts.length < 2) return { host: raw, port: '' }
-  const port = parts[parts.length - 1]
-  const host = parts.slice(0, -1).join(':')
-  if (!host) return { host: raw, port: '' }
+
+  const bracketMatch = raw.match(/^\[(.+)\]:(\d+)$/)
+  if (bracketMatch) {
+    return { host: bracketMatch[1], port: bracketMatch[2] }
+  }
+
+  const sep = raw.lastIndexOf(':')
+  if (sep <= 0 || sep >= raw.length - 1) return { host: raw, port: '' }
+  const host = raw.slice(0, sep)
+  const port = raw.slice(sep + 1)
+  if (!/^\d+$/.test(port)) return { host: raw, port: '' }
   return { host, port }
 }
 
@@ -376,11 +382,11 @@ async function fillWarpParamsFromNode(): Promise<void> {
     if (endpoint.host) defaultsForm.warp_server = endpoint.host
     if (endpoint.port) defaultsForm.warp_server_port = endpoint.port
     defaultsForm.warp_private_key = String(node.warp_private_key || '')
-    defaultsForm.warp_local_address_ipv4 = String(defaultsForm.warp_local_address_ipv4 || '172.16.0.2/32')
+    defaultsForm.warp_local_address_ipv4 = String(defaultsForm.warp_local_address_ipv4 || DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
     defaultsForm.warp_local_address_ipv6 = node.warp_v6 ? `${node.warp_v6}/128` : String(defaultsForm.warp_local_address_ipv6 || '')
     defaultsForm.warp_peer_public_key = String(defaultsForm.warp_peer_public_key || DEFAULT_WARP_PEER_PUBLIC_KEY)
-    defaultsForm.warp_system_interface = String(defaultsForm.warp_system_interface || 'false')
-    defaultsForm.warp_mtu = String(defaultsForm.warp_mtu || '1280')
+    defaultsForm.warp_system_interface = String(defaultsForm.warp_system_interface || DEFAULT_WARP_SYSTEM_INTERFACE)
+    defaultsForm.warp_mtu = String(defaultsForm.warp_mtu || DEFAULT_WARP_MTU)
     if (Array.isArray(node.warp_reserved) && node.warp_reserved.length === 3) {
       defaultsForm.warp_reserved = node.warp_reserved.join(',')
     }
@@ -397,6 +403,51 @@ function regenFieldValue(key: string): void {
     return
   }
   defaultsForm[key] = generateSecretValue(key, { ...defaultsForm, protocol: form.protocol } as Record<string, string>)
+}
+
+function validatePresetDefaults(defaults: Record<string, unknown>): string | null {
+  for (const field of presetParamFields.value) {
+    const val = defaults[field.key]
+    if ((val === undefined || val === '') && !field.optional) {
+      return `参数 ${field.label || field.key} 未配置`
+    }
+
+    if (field.key === 'port') {
+      const portNum = Number(val)
+      if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+        return '端口必须是 1 - 65535 的整数'
+      }
+    }
+  }
+  return null
+}
+
+function validateWarpDefaults(defaults: Record<string, unknown>): string | null {
+  const warpServer = String(defaults.warp_server || '').trim()
+  const warpLocalAddressV4 = String(defaults.warp_local_address_ipv4 || '').trim()
+  const warpPeerPublicKey = String(defaults.warp_peer_public_key || '').trim()
+  const warpSystemInterface = String(defaults.warp_system_interface || '').trim().toLowerCase()
+  const warpServerPort = Number(defaults.warp_server_port)
+  const warpMtu = Number(defaults.warp_mtu)
+  const warpReserved = String(defaults.warp_reserved || '').trim()
+
+  if (!warpServer) return 'WARP Server 未配置'
+  if (!warpLocalAddressV4) return 'WARP Local Address IPv4 未配置'
+  if (!warpPeerPublicKey) return 'WARP Peer Public Key 未配置'
+  if (warpSystemInterface !== 'true' && warpSystemInterface !== 'false') return 'WARP System Interface 必须是 true 或 false'
+  if (!Number.isInteger(warpServerPort) || warpServerPort < 1 || warpServerPort > 65535) {
+    return 'WARP Server Port 必须是 1 - 65535 的整数'
+  }
+  if (!Number.isInteger(warpMtu) || warpMtu < 576 || warpMtu > 65535) {
+    return 'WARP MTU 必须是 576 - 65535 的整数'
+  }
+  if (warpReserved) {
+    const parts = warpReserved.split(',').map((item) => Number(item.trim()))
+    if (parts.length !== 3 || parts.some((item) => !Number.isFinite(item))) {
+      return 'WARP Reserved 格式应为 a,b,c（3 个数字）'
+    }
+  }
+  return null
 }
 
 async function saveTemplate(): Promise<void> {
@@ -417,63 +468,17 @@ async function saveTemplate(): Promise<void> {
       return
     }
 
-    for (const field of presetParamFields.value) {
-      const val = defaults[field.key]
-      if (val === undefined || val === '') {
-        if (!field.optional) {
-          toastStore.push(`参数 ${field.label || field.key} 未配置`, 'warning')
-          return
-        }
-      }
-
-      if (field.key === 'port') {
-        const portNum = Number(val)
-        if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-          toastStore.push('端口必须是 1 - 65535 的整数', 'warning')
-          return
-        }
-      }
+    const presetError = validatePresetDefaults(defaults)
+    if (presetError) {
+      toastStore.push(presetError, 'warning')
+      return
     }
 
     if (form.warp_exit) {
-      const warpServer = String(defaults.warp_server || '').trim()
-      const warpLocalAddressV4 = String(defaults.warp_local_address_ipv4 || '').trim()
-      const warpPeerPublicKey = String(defaults.warp_peer_public_key || '').trim()
-      const warpSystemInterface = String(defaults.warp_system_interface || '').trim().toLowerCase()
-      const warpServerPort = Number(defaults.warp_server_port)
-      const warpMtu = Number(defaults.warp_mtu)
-      const warpReserved = String(defaults.warp_reserved || '').trim()
-
-      if (!warpServer) {
-        toastStore.push('WARP Server 未配置', 'warning')
+      const warpError = validateWarpDefaults(defaults)
+      if (warpError) {
+        toastStore.push(warpError, 'warning')
         return
-      }
-      if (!warpLocalAddressV4) {
-        toastStore.push('WARP Local Address IPv4 未配置', 'warning')
-        return
-      }
-      if (!warpPeerPublicKey) {
-        toastStore.push('WARP Peer Public Key 未配置', 'warning')
-        return
-      }
-      if (warpSystemInterface !== 'true' && warpSystemInterface !== 'false') {
-        toastStore.push('WARP System Interface 必须是 true 或 false', 'warning')
-        return
-      }
-      if (!Number.isInteger(warpServerPort) || warpServerPort < 1 || warpServerPort > 65535) {
-        toastStore.push('WARP Server Port 必须是 1 - 65535 的整数', 'warning')
-        return
-      }
-      if (!Number.isInteger(warpMtu) || warpMtu < 576 || warpMtu > 65535) {
-        toastStore.push('WARP MTU 必须是 576 - 65535 的整数', 'warning')
-        return
-      }
-      if (warpReserved) {
-        const parts = warpReserved.split(',').map((item) => Number(item.trim()))
-        if (parts.length !== 3 || parts.some((item) => !Number.isFinite(item))) {
-          toastStore.push('WARP Reserved 格式应为 a,b,c（3 个数字）', 'warning')
-          return
-        }
       }
     }
 
@@ -523,18 +528,10 @@ watch(
     if (!editorOpen.value) return
 
     ensureValidSelection()
-    if (editorMode.value !== 'create') return
-    const nextSource: Record<string, unknown> = { ...defaultsForm }
-    syncDefaultsForm(nextSource)
-    void regenRealityKeyPair(false, false)
-  },
-)
-
-watch(
-  () => [form.protocol, form.tls_mode, form.engine],
-  () => {
-    if (!editorOpen.value) return
-    ensureValidSelection()
+    if (editorMode.value === 'create') {
+      const nextSource: Record<string, unknown> = { ...defaultsForm }
+      syncDefaultsForm(nextSource)
+    }
     void regenRealityKeyPair(false, false)
   },
 )
@@ -668,7 +665,7 @@ onMounted(loadData)
     <article class="panel panel-pad" style="display: grid; gap: 10px">
       <strong>细节参数</strong>
 
-      <label v-for="field in allParamFields" :key="field.key" style="display: grid; gap: 6px">
+      <label v-for="field in presetParamFields" :key="field.key" style="display: grid; gap: 6px">
         <span style="font-weight: 700">{{ field.label }}</span>
         <div style="display: flex; gap: 8px; align-items: center">
           <select v-if="field.type === 'select'" v-model="defaultsForm[field.key]" class="select" style="flex: 1">

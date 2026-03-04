@@ -379,16 +379,29 @@ function normalizeV6Cidr(value, fallback) {
 function parseHostPort(value, fallbackHost, fallbackPort) {
   const raw = text(value)
   if (!raw) return { host: fallbackHost, port: fallbackPort }
-  const parts = raw.split(':')
-  if (parts.length < 2) return { host: raw, port: fallbackPort }
 
-  const port = Number(parts[parts.length - 1])
-  const host = parts.slice(0, -1).join(':')
-  if (!host) return { host: fallbackHost, port: fallbackPort }
+  const bracketMatch = raw.match(/^\[(.+)\]:(\d+)$/)
+  if (bracketMatch) {
+    return {
+      host: bracketMatch[1] || fallbackHost,
+      port: toPortNumber(bracketMatch[2], fallbackPort),
+    }
+  }
+
+  const sep = raw.lastIndexOf(':')
+  if (sep <= 0 || sep >= raw.length - 1) {
+    return { host: raw, port: fallbackPort }
+  }
+
+  const host = raw.slice(0, sep)
+  const portRaw = raw.slice(sep + 1)
+  if (!host || !/^\d+$/.test(portRaw)) {
+    return { host: raw, port: fallbackPort }
+  }
 
   return {
     host,
-    port: Number.isFinite(port) && port >= 1 && port <= 65535 ? Math.floor(port) : fallbackPort,
+    port: toPortNumber(portRaw, fallbackPort),
   }
 }
 
@@ -407,20 +420,19 @@ function normalizeReserved(value, fallback) {
   return fallback
 }
 
-function resolveWarpRoute(templates, node) {
-  // Check if any template in this group has warp_exit enabled.
-  const warpTemplates = (templates || []).filter((t) => t.warp_exit === true || t.defaults?.warp_exit === true)
-  if (warpTemplates.length === 0) return null
+function resolveWarpRouteCidrs(value) {
+  const mode = text(value).toLowerCase()
+  if (mode === 'ipv4') return ['0.0.0.0/0']
+  if (mode === 'ipv6') return ['::/0']
+  return ['0.0.0.0/0', '::/0']
+}
 
-  const primaryTemplate = warpTemplates[0]
+function resolveWarpRoute(templates, node) {
+  const primaryTemplate = (templates || []).find((t) => t.warp_exit === true || t.defaults?.warp_exit === true)
+  if (!primaryTemplate) return null
   const settings = getEffectiveTemplateSettings(primaryTemplate, {}, node)
 
-  // Use the first warp template's route mode.
-  const mode = String(primaryTemplate.warp_route_mode || primaryTemplate.defaults?.warp_route_mode || 'all').toLowerCase()
-  let ipCidrs
-  if (mode === 'ipv4') ipCidrs = ['0.0.0.0/0']
-  else if (mode === 'ipv6') ipCidrs = ['::/0']
-  else ipCidrs = ['0.0.0.0/0', '::/0']
+  const ipCidrs = resolveWarpRouteCidrs(primaryTemplate.warp_route_mode || primaryTemplate.defaults?.warp_route_mode || 'all')
 
   const fallbackReserved = Array.isArray(node?.warp_reserved) && node.warp_reserved.length === 3
     ? node.warp_reserved.map(Number)
