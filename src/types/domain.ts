@@ -36,6 +36,7 @@ export interface NodeRecord {
   node_type: NodeKind
   region: string
   tags: string[]
+  install_cert: boolean
   entry_cdn: string
   entry_direct: string
   entry_ip: string

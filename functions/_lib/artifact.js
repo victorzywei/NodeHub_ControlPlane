@@ -348,71 +348,149 @@ function buildSingboxInbound(template, params, idx) {
 }
 
 // ── WARP helpers ──
+const DEFAULT_WARP_SERVER = 'engage.cloudflareclient.com'
+const DEFAULT_WARP_SERVER_PORT = 2408
+const DEFAULT_WARP_PEER_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
+const DEFAULT_WARP_LOCAL_ADDRESS_IPV4 = '172.16.0.2/32'
+const DEFAULT_WARP_LOCAL_ADDRESS_IPV6 = '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128'
+
+function toBool(value, fallback = false) {
+  if (value === true || value === false) return value
+  const raw = text(value).toLowerCase()
+  if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true
+  if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false
+  return fallback
+}
+
+function toPortNumber(value, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  const port = Math.floor(n)
+  if (port < 1 || port > 65535) return fallback
+  return port
+}
+
+function normalizeV6Cidr(value, fallback) {
+  const raw = text(value)
+  if (!raw) return fallback
+  return raw.includes('/') ? raw : `${raw}/128`
+}
+
+function parseHostPort(value, fallbackHost, fallbackPort) {
+  const raw = text(value)
+  if (!raw) return { host: fallbackHost, port: fallbackPort }
+  const parts = raw.split(':')
+  if (parts.length < 2) return { host: raw, port: fallbackPort }
+
+  const port = Number(parts[parts.length - 1])
+  const host = parts.slice(0, -1).join(':')
+  if (!host) return { host: fallbackHost, port: fallbackPort }
+
+  return {
+    host,
+    port: Number.isFinite(port) && port >= 1 && port <= 65535 ? Math.floor(port) : fallbackPort,
+  }
+}
+
+function normalizeReserved(value, fallback) {
+  if (Array.isArray(value) && value.length === 3) {
+    const reserved = value.map((item) => Number(item))
+    if (reserved.every((item) => Number.isFinite(item))) return reserved
+  }
+
+  const raw = text(value)
+  if (raw) {
+    const reserved = raw.split(',').map((item) => Number(item.trim()))
+    if (reserved.length === 3 && reserved.every((item) => Number.isFinite(item))) return reserved
+  }
+
+  return fallback
+}
+
 function resolveWarpRoute(templates, node) {
-  // Check if any template in this group has warp_exit enabled
+  // Check if any template in this group has warp_exit enabled.
   const warpTemplates = (templates || []).filter((t) => t.warp_exit === true || t.defaults?.warp_exit === true)
   if (warpTemplates.length === 0) return null
 
-  // WARP keys come from node's heartbeat-reported fields (auto-registered by agent)
-  const pvk = text(node?.warp_private_key)
-  if (!pvk) return null
+  const primaryTemplate = warpTemplates[0]
+  const settings = getEffectiveTemplateSettings(primaryTemplate, {}, node)
 
-  const v6 = text(node?.warp_v6) || '2606:4700:110:8d8d:1845:c39f:2dd5:a03a'
-  const reserved = Array.isArray(node?.warp_reserved) && node.warp_reserved.length === 3
-    ? node.warp_reserved.map(Number)
-    : [0, 0, 0]
-  const rawEndpoint = text(node?.warp_endpoint) || 'engage.cloudflareclient.com:2408'
-  const endpoint = rawEndpoint.includes(':') ? rawEndpoint.split(':')[0] : rawEndpoint
-  const endpointPort = rawEndpoint.includes(':') ? Number(rawEndpoint.split(':')[1]) || 2408 : 2408
-
-  // Use the first warp template's route mode
-  const mode = String(warpTemplates[0].warp_route_mode || warpTemplates[0].defaults?.warp_route_mode || 'all').toLowerCase()
-
+  // Use the first warp template's route mode.
+  const mode = String(primaryTemplate.warp_route_mode || primaryTemplate.defaults?.warp_route_mode || 'all').toLowerCase()
   let ipCidrs
   if (mode === 'ipv4') ipCidrs = ['0.0.0.0/0']
   else if (mode === 'ipv6') ipCidrs = ['::/0']
   else ipCidrs = ['0.0.0.0/0', '::/0']
 
-  return { pvk, v6, reserved, endpoint, endpointPort, ipCidrs }
+  const fallbackReserved = Array.isArray(node?.warp_reserved) && node.warp_reserved.length === 3
+    ? node.warp_reserved.map(Number)
+    : [0, 0, 0]
+
+  const endpointFallback = parseHostPort(node?.warp_endpoint, DEFAULT_WARP_SERVER, DEFAULT_WARP_SERVER_PORT)
+  const nodeV6 = normalizeV6Cidr(text(node?.warp_v6), DEFAULT_WARP_LOCAL_ADDRESS_IPV6)
+
+  const localAddressV4 = text(settings.warp_local_address_ipv4 || settings.local_address_ipv4 || DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
+  const localAddressV6 = normalizeV6Cidr(
+    settings.warp_local_address_ipv6 || settings.local_address_ipv6 || nodeV6,
+    DEFAULT_WARP_LOCAL_ADDRESS_IPV6,
+  )
+  const localAddress = [localAddressV4, localAddressV6].filter(Boolean)
+
+  const privateKey = text(settings.warp_private_key || settings.private_key || node?.warp_private_key)
+  if (!privateKey) return null
+
+  const server = text(settings.warp_server || settings.server || endpointFallback.host || DEFAULT_WARP_SERVER)
+  const serverPort = toPortNumber(settings.warp_server_port || settings.server_port, endpointFallback.port)
+  const peerPublicKey = text(settings.warp_peer_public_key || settings.peer_public_key || DEFAULT_WARP_PEER_PUBLIC_KEY)
+  const systemInterface = toBool(settings.warp_system_interface ?? settings.system_interface, false)
+  const mtu = Math.max(576, Math.min(65535, Math.floor(num(settings.warp_mtu, 1280))))
+  const reserved = normalizeReserved(settings.warp_reserved, fallbackReserved)
+
+  return {
+    ipCidrs,
+    server,
+    serverPort,
+    localAddress,
+    privateKey,
+    peerPublicKey,
+    systemInterface,
+    mtu,
+    reserved,
+  }
 }
 
 function buildSingboxConfig(templates, params, node) {
   const inbounds = templates.map((tpl, idx) => buildSingboxInbound(tpl, params, idx))
   const outbounds = [{ type: 'direct', tag: 'direct' }]
   const route = { final: 'direct' }
-  const endpoints = []
 
   const warp = resolveWarpRoute(templates, node)
   if (warp) {
-    endpoints.push({
+    outbounds.push({
       type: 'wireguard',
       tag: 'warp-out',
-      address: [`172.16.0.2/32`, `${warp.v6}/128`],
-      private_key: warp.pvk,
-      peers: [{
-        address: warp.endpoint,
-        port: warp.endpointPort,
-        public_key: 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
-        allowed_ips: ['0.0.0.0/0', '::/0'],
-        reserved: warp.reserved,
-      }],
+      server: warp.server,
+      server_port: warp.serverPort,
+      local_address: warp.localAddress,
+      private_key: warp.privateKey,
+      peer_public_key: warp.peerPublicKey,
+      reserved: warp.reserved,
+      system_interface: warp.systemInterface,
+      mtu: warp.mtu,
     })
     route.rules = [
       { action: 'sniff' },
       { action: 'resolve', strategy: 'prefer_ipv4' },
       { ip_cidr: warp.ipCidrs, outbound: 'warp-out' },
     ]
-    route.final = 'warp-out'
   }
 
-  const config = {
+  return {
     log: { level: 'info', timestamp: true },
     inbounds,
     outbounds,
     route,
   }
-  if (endpoints.length > 0) config.endpoints = endpoints
-  return config
 }
 
 function buildXrayStreamSettings(template, settings) {
@@ -592,19 +670,21 @@ function buildXrayConfig(templates, params, node) {
 
   const warp = resolveWarpRoute(templates, node)
   if (warp) {
-    const warpEndpoint = `${warp.endpoint}:${warp.endpointPort}`
+    const warpEndpoint = `${warp.server}:${warp.serverPort}`
     outbounds.push({
       tag: 'x-warp-out',
       protocol: 'wireguard',
       settings: {
-        secretKey: warp.pvk,
-        address: ['172.16.0.2/32', `${warp.v6}/128`],
+        secretKey: warp.privateKey,
+        address: warp.localAddress,
         peers: [{
-          publicKey: 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
+          publicKey: warp.peerPublicKey,
           allowedIPs: ['0.0.0.0/0', '::/0'],
           endpoint: warpEndpoint,
         }],
         reserved: warp.reserved,
+        mtu: warp.mtu,
+        kernelMode: warp.systemInterface,
       },
     })
     outbounds.push({
@@ -616,7 +696,6 @@ function buildXrayConfig(templates, params, node) {
     routing.domainStrategy = 'IPOnDemand'
     routing.rules = [
       { type: 'field', ip: warp.ipCidrs, network: 'tcp,udp', outboundTag: 'warp-out' },
-      { type: 'field', network: 'tcp,udp', outboundTag: 'warp-out' },
     ]
   }
 

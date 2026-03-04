@@ -37,6 +37,10 @@ export async function onRequestPatch({ request, env, params }) {
     node.install_warp = true
   }
 
+  if (body.install_cert !== undefined) {
+    node.install_cert = body.install_cert === true
+  }
+
   if (body.install_argo !== undefined) {
     node.install_argo = body.install_argo === true
   } else if (

@@ -5,7 +5,8 @@ import FilterBar from '@/components/ui/FilterBar.vue'
 import DetailDrawer from '@/components/ui/DetailDrawer.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { createTemplate, deleteTemplate, getTemplateRegistry, listTemplates, updateTemplate } from '@/api/services/templates'
-import type { NodeKind, TemplateRecord, TemplateRegistry } from '@/types/domain'
+import { getNode, listNodes } from '@/api/services/nodes'
+import type { NodeKind, NodeRecord, TemplateRecord, TemplateRegistry } from '@/types/domain'
 import type { TemplateParamField } from '@/utils/templateParams'
 import { supportsProtocolTls, supportsTemplateCombination } from '@/utils/templateCapability'
 import { generateRealityKeyPair, generateSecretValue, getPresetTemplateParamFields, valueToInput } from '@/utils/templateParams'
@@ -16,10 +17,12 @@ interface EditorParamField extends TemplateParamField {
 }
 
 const toastStore = useToastStore()
+const DEFAULT_WARP_PEER_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
 
 const loading = ref(false)
 const keyword = ref('')
 const templates = ref<TemplateRecord[]>([])
+const nodes = ref<NodeRecord[]>([])
 const registry = ref<TemplateRegistry>({
   engines: [],
   protocols: [],
@@ -47,6 +50,7 @@ const form = reactive({
 
 const confirmDelete = ref(false)
 const generatingRealityPair = ref(false)
+const selectedWarpNodeId = ref('')
 
 const availableProtocols = computed(() => registry.value.protocols)
 
@@ -96,8 +100,94 @@ const presetParamFields = computed<EditorParamField[]>(() => {
   return getPresetTemplateParamFields(form.protocol, form.transport, form.tls_mode, form.engine)
 })
 
+const warpParamFields = computed<EditorParamField[]>(() => {
+  return [
+    {
+      key: 'warp_server',
+      label: 'Server',
+      type: 'text',
+      valueType: 'string',
+      defaultValue: 'engage.cloudflareclient.com',
+    },
+    {
+      key: 'warp_server_port',
+      label: 'Server Port',
+      type: 'number',
+      valueType: 'number',
+      defaultValue: 2408,
+    },
+    {
+      key: 'warp_local_address_ipv4',
+      label: 'Local Address IPv4',
+      type: 'text',
+      valueType: 'string',
+      defaultValue: '172.16.0.2/32',
+    },
+    {
+      key: 'warp_local_address_ipv6',
+      label: 'Local Address IPv6',
+      type: 'text',
+      valueType: 'string',
+      defaultValue: '',
+      optional: true,
+      placeholder: '留空自动使用节点上报 IPv6/128',
+    },
+    {
+      key: 'warp_private_key',
+      label: 'Private Key',
+      type: 'password',
+      valueType: 'string',
+      defaultValue: '',
+      optional: true,
+      placeholder: '留空时使用节点自动上报密钥',
+    },
+    {
+      key: 'warp_peer_public_key',
+      label: 'Peer Public Key',
+      type: 'text',
+      valueType: 'string',
+      defaultValue: DEFAULT_WARP_PEER_PUBLIC_KEY,
+    },
+    {
+      key: 'warp_system_interface',
+      label: 'System Interface',
+      type: 'select',
+      valueType: 'string',
+      options: [
+        { value: 'false', label: 'false' },
+        { value: 'true', label: 'true' },
+      ],
+      defaultValue: 'false',
+    },
+    {
+      key: 'warp_mtu',
+      label: 'MTU',
+      type: 'number',
+      valueType: 'number',
+      defaultValue: 1280,
+    },
+    {
+      key: 'warp_reserved',
+      label: 'Reserved',
+      type: 'text',
+      valueType: 'string',
+      defaultValue: '0,0,0',
+      optional: true,
+      placeholder: '示例: 0,0,0',
+    },
+  ]
+})
+
+const defaultsParamFields = computed<EditorParamField[]>(() => {
+  return [...presetParamFields.value, ...warpParamFields.value]
+})
+
 const allParamFields = computed<EditorParamField[]>(() => {
   return presetParamFields.value
+})
+
+const warpCandidateNodes = computed<NodeRecord[]>(() => {
+  return nodes.value.filter((node) => node.node_type === 'vps')
 })
 
 function replaceDefaultsForm(next: Record<string, string>): void {
@@ -112,7 +202,7 @@ function replaceDefaultsForm(next: Record<string, string>): void {
 function syncDefaultsForm(source: Record<string, unknown>): void {
   const next: Record<string, string> = {}
 
-  presetParamFields.value.forEach((field) => {
+  defaultsParamFields.value.forEach((field) => {
     const raw = source[field.key]
     let value = valueToInput(raw)
 
@@ -176,9 +266,10 @@ async function regenRealityKeyPair(force = true, notify = true): Promise<void> {
 
 function buildDefaultsPayload(): Record<string, unknown> {
   const result: Record<string, unknown> = {}
-  const fieldMap = new Map(presetParamFields.value.map((field) => [field.key, field]))
+  const payloadFields = form.warp_exit ? defaultsParamFields.value : presetParamFields.value
+  const fieldMap = new Map(payloadFields.map((field) => [field.key, field]))
 
-  presetParamFields.value.forEach((field) => {
+  payloadFields.forEach((field) => {
     const key = field.key
     const rawValue = defaultsForm[key]
     const value = String(rawValue ?? '')
@@ -204,9 +295,10 @@ function buildDefaultsPayload(): Record<string, unknown> {
 async function loadData(): Promise<void> {
   loading.value = true
   try {
-    const [templateRows, registryData] = await Promise.all([listTemplates(), getTemplateRegistry()])
+    const [templateRows, registryData, nodeRows] = await Promise.all([listTemplates(), getTemplateRegistry(), listNodes()])
     templates.value = templateRows
     registry.value = registryData
+    nodes.value = nodeRows
   } catch {
     toastStore.push('模板数据加载失败', 'danger')
   } finally {
@@ -224,6 +316,7 @@ function resetCreateForm(): void {
   form.description = ''
   form.warp_exit = false
   form.warp_route_mode = 'all'
+  selectedWarpNodeId.value = ''
   ensureValidSelection()
   syncDefaultsForm({})
   void regenRealityKeyPair(false, false)
@@ -248,10 +341,54 @@ function openEdit(template: TemplateRecord): void {
   form.description = template.description
   form.warp_exit = template.warp_exit || false
   form.warp_route_mode = template.warp_route_mode || 'all'
+  selectedWarpNodeId.value = ''
   ensureValidSelection()
   syncDefaultsForm(template.defaults || {})
   void regenRealityKeyPair(false, false)
   editorOpen.value = true
+}
+
+function parseWarpEndpoint(rawEndpoint: string): { host: string; port: string } {
+  const raw = String(rawEndpoint || '').trim()
+  if (!raw) return { host: '', port: '' }
+  const parts = raw.split(':')
+  if (parts.length < 2) return { host: raw, port: '' }
+  const port = parts[parts.length - 1]
+  const host = parts.slice(0, -1).join(':')
+  if (!host) return { host: raw, port: '' }
+  return { host, port }
+}
+
+async function fillWarpParamsFromNode(): Promise<void> {
+  if (!selectedWarpNodeId.value) {
+    toastStore.push('请先选择节点', 'warning')
+    return
+  }
+
+  try {
+    const node = await getNode(selectedWarpNodeId.value)
+    if (!node.warp_private_key) {
+      toastStore.push('该节点未上报 WARP 私钥，请先在节点侧完成 WARP 注册', 'warning')
+      return
+    }
+
+    const endpoint = parseWarpEndpoint(node.warp_endpoint || '')
+    if (endpoint.host) defaultsForm.warp_server = endpoint.host
+    if (endpoint.port) defaultsForm.warp_server_port = endpoint.port
+    defaultsForm.warp_private_key = String(node.warp_private_key || '')
+    defaultsForm.warp_local_address_ipv4 = String(defaultsForm.warp_local_address_ipv4 || '172.16.0.2/32')
+    defaultsForm.warp_local_address_ipv6 = node.warp_v6 ? `${node.warp_v6}/128` : String(defaultsForm.warp_local_address_ipv6 || '')
+    defaultsForm.warp_peer_public_key = String(defaultsForm.warp_peer_public_key || DEFAULT_WARP_PEER_PUBLIC_KEY)
+    defaultsForm.warp_system_interface = String(defaultsForm.warp_system_interface || 'false')
+    defaultsForm.warp_mtu = String(defaultsForm.warp_mtu || '1280')
+    if (Array.isArray(node.warp_reserved) && node.warp_reserved.length === 3) {
+      defaultsForm.warp_reserved = node.warp_reserved.join(',')
+    }
+
+    toastStore.push(`已读取节点 ${node.name} 的 WARP 参数`, 'success')
+  } catch {
+    toastStore.push('读取节点 WARP 参数失败', 'danger')
+  }
 }
 
 function regenFieldValue(key: string): void {
@@ -293,6 +430,48 @@ async function saveTemplate(): Promise<void> {
         const portNum = Number(val)
         if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
           toastStore.push('端口必须是 1 - 65535 的整数', 'warning')
+          return
+        }
+      }
+    }
+
+    if (form.warp_exit) {
+      const warpServer = String(defaults.warp_server || '').trim()
+      const warpLocalAddressV4 = String(defaults.warp_local_address_ipv4 || '').trim()
+      const warpPeerPublicKey = String(defaults.warp_peer_public_key || '').trim()
+      const warpSystemInterface = String(defaults.warp_system_interface || '').trim().toLowerCase()
+      const warpServerPort = Number(defaults.warp_server_port)
+      const warpMtu = Number(defaults.warp_mtu)
+      const warpReserved = String(defaults.warp_reserved || '').trim()
+
+      if (!warpServer) {
+        toastStore.push('WARP Server 未配置', 'warning')
+        return
+      }
+      if (!warpLocalAddressV4) {
+        toastStore.push('WARP Local Address IPv4 未配置', 'warning')
+        return
+      }
+      if (!warpPeerPublicKey) {
+        toastStore.push('WARP Peer Public Key 未配置', 'warning')
+        return
+      }
+      if (warpSystemInterface !== 'true' && warpSystemInterface !== 'false') {
+        toastStore.push('WARP System Interface 必须是 true 或 false', 'warning')
+        return
+      }
+      if (!Number.isInteger(warpServerPort) || warpServerPort < 1 || warpServerPort > 65535) {
+        toastStore.push('WARP Server Port 必须是 1 - 65535 的整数', 'warning')
+        return
+      }
+      if (!Number.isInteger(warpMtu) || warpMtu < 576 || warpMtu > 65535) {
+        toastStore.push('WARP MTU 必须是 576 - 65535 的整数', 'warning')
+        return
+      }
+      if (warpReserved) {
+        const parts = warpReserved.split(',').map((item) => Number(item.trim()))
+        if (parts.length !== 3 || parts.some((item) => !Number.isFinite(item))) {
+          toastStore.push('WARP Reserved 格式应为 a,b,c（3 个数字）', 'warning')
           return
         }
       }
@@ -541,6 +720,18 @@ onMounted(loadData)
       </label>
       <template v-if="form.warp_exit">
         <label>
+          读取节点 WARP 参数
+          <div style="display: flex; gap: 8px">
+            <select v-model="selectedWarpNodeId" class="select" style="flex: 1">
+              <option value="">请选择节点</option>
+              <option v-for="node in warpCandidateNodes" :key="node.id" :value="node.id">
+                {{ node.name }} ({{ node.warp_status || '未注册' }})
+              </option>
+            </select>
+            <button class="btn btn-secondary" type="button" @click="fillWarpParamsFromNode">获取</button>
+          </div>
+        </label>
+        <label>
           路由模式
           <select v-model="form.warp_route_mode" class="select">
             <option value="all">全部流量 (IPv4+IPv6)</option>
@@ -548,8 +739,49 @@ onMounted(loadData)
             <option value="ipv6">仅 IPv6</option>
           </select>
         </label>
+        <label>
+          Server
+          <input v-model="defaultsForm.warp_server" class="input" placeholder="engage.cloudflareclient.com" />
+        </label>
+        <label>
+          Server Port
+          <input v-model="defaultsForm.warp_server_port" class="input" type="number" min="1" max="65535" step="1" />
+        </label>
+        <label>
+          Local Address IPv4
+          <input v-model="defaultsForm.warp_local_address_ipv4" class="input" placeholder="172.16.0.2/32" />
+        </label>
+        <label>
+          Local Address IPv6
+          <input v-model="defaultsForm.warp_local_address_ipv6" class="input" placeholder="留空自动使用节点上报 IPv6/128" />
+        </label>
+        <label>
+          Private Key
+          <input v-model="defaultsForm.warp_private_key" class="input" type="password" placeholder="留空时使用节点自动上报密钥" />
+        </label>
+        <label>
+          Peer Public Key
+          <input v-model="defaultsForm.warp_peer_public_key" class="input" />
+        </label>
+        <label>
+          System Interface
+          <select v-model="defaultsForm.warp_system_interface" class="select">
+            <option value="false">false</option>
+            <option value="true">true</option>
+          </select>
+        </label>
+        <label>
+          MTU
+          <input v-model="defaultsForm.warp_mtu" class="input" type="number" min="576" max="65535" step="1" />
+        </label>
+        <label>
+          Reserved
+          <input v-model="defaultsForm.warp_reserved" class="input" placeholder="0,0,0" />
+        </label>
       </template>
-      <div class="muted" style="font-size: 12px">启用后发布的配置会通过 WARP WireGuard 路由。节点需先配置 WARP License 并完成注册。</div>
+      <div class="muted" style="font-size: 12px">
+        同一套 WARP 参数会同时用于 xray / sing-box 出口配置；可手动填写，也可从节点一键读取后再调整。
+      </div>
     </article>
 
     <div style="display: flex; gap: 8px">

@@ -28,6 +28,7 @@ export async function onRequestPost({ request, env }) {
   const warpLicense = String(body.warp_license || '')
   const argoToken = String(body.argo_token || '')
   const argoDomain = String(body.argo_domain || '')
+  const installCert = body.install_cert !== undefined ? body.install_cert === true : true
   const installWarp = body.install_warp !== undefined ? body.install_warp === true : warpLicense.trim().length > 0
   const installArgo = body.install_argo !== undefined
     ? body.install_argo === true
@@ -46,6 +47,7 @@ export async function onRequestPost({ request, env }) {
     node_type: nodeType,
     region: String(body.region || ''),
     tags: Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : [],
+    install_cert: installCert,
     entry_cdn: String(body.entry_cdn || ''),
     entry_direct: String(body.entry_direct || ''),
     entry_ip: String(body.entry_ip || ''),

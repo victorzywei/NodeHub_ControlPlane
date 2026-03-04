@@ -59,6 +59,7 @@ export function normalizeNode(node) {
   const installArgo = node.install_argo !== undefined
     ? toBool(node.install_argo)
     : (toString(node.argo_token).trim().length > 0 || toString(node.argo_domain).trim().length > 0)
+  const installCert = node.install_cert !== undefined ? toBool(node.install_cert) : true
 
   return {
     id: toString(node.id),
@@ -66,6 +67,7 @@ export function normalizeNode(node) {
     node_type: toString(node.node_type),
     region: toString(node.region),
     tags: toStringArray(node.tags),
+    install_cert: installCert,
     entry_cdn: toString(node.entry_cdn),
     entry_direct: toString(node.entry_direct),
     entry_ip: toString(node.entry_ip),

@@ -27,21 +27,22 @@ export async function onRequestGet({ request, env, params }) {
     ` --heartbeat-interval ${quoteShell('600')}`,
   ]
   const installWarp = node.install_warp === true || (node.install_warp === undefined && Boolean(String(node.warp_license || '').trim()))
+  const installCert = node.install_cert !== undefined ? node.install_cert === true : true
   const installArgo = node.install_argo === true || (
     node.install_argo === undefined &&
     (Boolean(String(node.argo_token || '').trim()) || Boolean(String(node.argo_domain || '').trim()))
   )
 
-  if (node.entry_cdn) {
+  if (installCert && node.entry_cdn) {
     commandParts.push(` --tls-domain ${quoteShell(node.entry_cdn)}`)
   }
-  if (node.entry_direct) {
+  if (installCert && node.entry_direct) {
     commandParts.push(` --tls-domain-alt ${quoteShell(node.entry_direct)}`)
   }
   if (node.github_mirror) {
     commandParts.push(` --github-mirror ${quoteShell(node.github_mirror)}`)
   }
-  if (node.cf_api_token) {
+  if (installCert && node.cf_api_token) {
     commandParts.push(` --cf-api-token ${quoteShell(node.cf_api_token)}`)
   }
   if (installWarp) {

@@ -36,6 +36,7 @@ const form = reactive({
   node_type: 'vps' as NodeKind,
   region: '',
   tags: '',
+  install_cert: true,
   entry_cdn: '',
   entry_direct: '',
   entry_ip: '',
@@ -112,6 +113,7 @@ function toPayload(): Partial<NodeRecord> {
       .split(',')
       .map((item: string) => item.trim())
       .filter(Boolean),
+    install_cert: form.install_cert,
     entry_cdn: form.entry_cdn.trim(),
     entry_direct: form.entry_direct.trim(),
     entry_ip: form.entry_ip.trim(),
@@ -130,6 +132,7 @@ function fillForm(node?: NodeRecord): void {
   form.node_type = node?.node_type || 'vps'
   form.region = node?.region || ''
   form.tags = (node?.tags || []).join(', ')
+  form.install_cert = node?.install_cert ?? true
   form.entry_cdn = node?.entry_cdn || ''
   form.entry_direct = node?.entry_direct || ''
   form.entry_ip = node?.entry_ip || ''
@@ -450,6 +453,7 @@ onMounted(loadNodesData)
       <div><strong>{{ detailNode.name }}</strong></div>
       <div class="muted">{{ detailNode.id }}</div>
       <div>类型：{{ detailNode.node_type }}</div>
+      <div>证书安装：{{ detailNode.install_cert ? '已启用' : '已关闭' }}</div>
       <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
       <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
       <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
@@ -528,25 +532,39 @@ onMounted(loadNodesData)
       <input v-model="form.tags" class="input" />
     </label>
     <label>
-      入口 CDN
-      <input v-model="form.entry_cdn" class="input" />
-    </label>
-    <label>
-      入口 Direct
-      <input v-model="form.entry_direct" class="input" />
-    </label>
-    <label>
-      入口 IP
-      <input v-model="form.entry_ip" class="input" />
-    </label>
-    <label>
       GitHub 镜像 (可选)
       <input v-model="form.github_mirror" class="input" placeholder="用于 vps 下载 github 文件" />
     </label>
-    <label>
-      Cloudflare API Token (可选)
-      <input v-model="form.cf_api_token" class="input" placeholder="用于申请 CF 证书" />
-    </label>
+
+    <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
+      <div style="font-weight: 700; margin-bottom: 10px">证书安装</div>
+      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+        <input type="checkbox" v-model="form.install_cert" />
+        <span>安装域名证书（acme.sh / lego）</span>
+      </label>
+      <label>
+        入口 CDN 域名
+        <input v-model="form.entry_cdn" class="input" />
+      </label>
+      <label>
+        入口 Direct 域名
+        <input v-model="form.entry_direct" class="input" />
+      </label>
+      <label>
+        入口 IP
+        <input v-model="form.entry_ip" class="input" />
+      </label>
+      <template v-if="form.install_cert">
+        <label>
+          Cloudflare API Token (可选)
+          <input v-model="form.cf_api_token" class="input" placeholder="用于申请 CF 证书" />
+        </label>
+      </template>
+      <div class="muted" style="font-size: 12px">
+        勾选后安装命令会带 --tls-domain / --tls-domain-alt（及可选 --cf-api-token）并尝试签发证书；
+        不勾选时将跳过证书安装，适合二次部署复用已有证书。
+      </div>
+    </div>
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
       <div style="font-weight: 700; margin-bottom: 10px">WARP 出口</div>
