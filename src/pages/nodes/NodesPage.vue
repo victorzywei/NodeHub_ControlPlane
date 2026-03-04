@@ -27,6 +27,8 @@ const detailOpen = ref(false)
 const detailNode = ref<NodeRecord | null>(null)
 const detailInstallCommand = ref('')
 const detailUninstallCommand = ref('')
+const detailWarpKeyVisible = ref(false)
+const detailArgoTokenVisible = ref(false)
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
@@ -285,6 +287,8 @@ async function openDetail(nodeId: string): Promise<void> {
   detailOpen.value = true
   detailInstallCommand.value = ''
   detailUninstallCommand.value = ''
+  detailWarpKeyVisible.value = false
+  detailArgoTokenVisible.value = false
   try {
     const node = await getNode(nodeId)
     detailNode.value = node
@@ -298,6 +302,19 @@ async function openDetail(nodeId: string): Promise<void> {
   } catch {
     toastStore.push('节点详情加载失败', 'danger')
   }
+}
+
+function formatWarpReserved(value: number[] | null | undefined): string {
+  if (!Array.isArray(value) || value.length === 0) return '-'
+  const nums = value.map((item) => Number(item)).filter((item) => Number.isFinite(item))
+  return nums.length > 0 ? nums.join(',') : '-'
+}
+
+function maskSecret(value: string): string {
+  const text = String(value || '')
+  if (!text) return '-'
+  if (text.length <= 8) return '*'.repeat(text.length)
+  return `${text.slice(0, 6)}...${text.slice(-4)}`
 }
 
 async function runBatchDelete(): Promise<void> {
@@ -481,8 +498,22 @@ onMounted(loadNodesData)
       <div>注册状态：
         <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
       </div>
-      <div v-if="detailNode.warp_private_key">密钥：已就绪</div>
-      <div v-if="detailNode.warp_v6">IPv6：{{ detailNode.warp_v6 }}</div>
+      <div>
+        密钥：
+        <template v-if="detailNode.warp_private_key">
+          <code>{{ detailWarpKeyVisible ? detailNode.warp_private_key : maskSecret(detailNode.warp_private_key) }}</code>
+          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="detailWarpKeyVisible = !detailWarpKeyVisible">
+            {{ detailWarpKeyVisible ? '隐藏' : '显示' }}
+          </button>
+          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="copyValue(detailNode.warp_private_key, 'WARP 私钥')">
+            复制
+          </button>
+        </template>
+        <span v-else>-</span>
+      </div>
+      <div>IPv6：{{ detailNode.warp_v6 || '-' }}</div>
+      <div>Endpoint：{{ detailNode.warp_endpoint || '-' }}</div>
+      <div>Reserved：{{ formatWarpReserved(detailNode.warp_reserved) }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">Argo 隧道</div>
       <div>配置：
@@ -490,9 +521,22 @@ onMounted(loadNodesData)
           {{ detailNode.install_argo ? (detailNode.argo_token ? '固定隧道' : '临时隧道') : '未启用' }}
         </span>
       </div>
-      <div v-if="detailNode.install_argo && detailNode.argo_domain">域名：{{ detailNode.argo_domain }}</div>
-      <div v-if="detailNode.install_argo && detailNode.argo_temp_domain">临时域名：{{ detailNode.argo_temp_domain }}</div>
-      <div v-if="detailNode.install_argo && detailNode.argo_status">运行状态：{{ detailNode.argo_status }}</div>
+      <div>
+        Token：
+        <template v-if="detailNode.argo_token">
+          <code>{{ detailArgoTokenVisible ? detailNode.argo_token : maskSecret(detailNode.argo_token) }}</code>
+          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="detailArgoTokenVisible = !detailArgoTokenVisible">
+            {{ detailArgoTokenVisible ? '隐藏' : '显示' }}
+          </button>
+          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="copyValue(detailNode.argo_token, 'Argo Token')">
+            复制
+          </button>
+        </template>
+        <span v-else>-</span>
+      </div>
+      <div>固定域名：{{ detailNode.argo_domain || '-' }}</div>
+      <div>临时域名：{{ detailNode.argo_temp_domain || '-' }}</div>
+      <div>运行状态：{{ detailNode.argo_status || '-' }}</div>
       <button class="btn btn-secondary" style="margin-top: 8px" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
       <template v-if="detailInstallCommand">
         <div class="muted" style="margin-top: 16px; font-weight: 600">VPS 安装命令</div>
