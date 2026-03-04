@@ -7,6 +7,38 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback
 }
 
+function hash32(input) {
+  // FNV-1a 32-bit hash, deterministic and fast for seeded fallback values.
+  let hash = 0x811c9dc5
+  const textInput = String(input ?? '')
+  for (let i = 0; i < textInput.length; i += 1) {
+    hash ^= textInput.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash >>> 0
+}
+
+function seededHex(seed, bytes) {
+  let out = ''
+  let idx = 0
+  while (out.length < bytes * 2) {
+    const h = hash32(`${seed}:${idx}`).toString(16).padStart(8, '0')
+    out += h
+    idx += 1
+  }
+  return out.slice(0, bytes * 2)
+}
+
+function deterministicUuid(seed) {
+  const hex = seededHex(seed, 16).split('')
+  // UUID v4 layout bits
+  hex[12] = '4'
+  const variant = Number.parseInt(hex[16], 16)
+  hex[16] = ((variant & 0x3) | 0x8).toString(16)
+  const value = hex.join('')
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20, 32)}`
+}
+
 function randomHex(bytes) {
   const array = new Uint8Array(bytes)
   crypto.getRandomValues(array)
@@ -76,27 +108,36 @@ function resolveRequiredValue(settings, keys, generator) {
   return generated
 }
 
-function toUser(template, settings) {
+function toUser(template, settings, seedBase = '') {
+  const seeded = (suffix, randomFactory, bytes = 16) => {
+    if (seedBase) return seededHex(`${seedBase}:${suffix}`, bytes)
+    return randomFactory()
+  }
+  const seededUuidValue = (suffix) => {
+    if (seedBase) return deterministicUuid(`${seedBase}:${suffix}`)
+    return randomUuid()
+  }
+
   const protocol = text(template.protocol).toLowerCase()
   if (protocol === 'vless') {
     return {
-      uuid: resolveRequiredValue(settings, ['uuid', 'user_id', 'id'], randomUuid),
+      uuid: resolveRequiredValue(settings, ['uuid', 'user_id', 'id'], () => seededUuidValue('uuid')),
       flow: text(settings.flow) || undefined,
     }
   }
   if (protocol === 'vmess') {
     return {
-      uuid: resolveRequiredValue(settings, ['uuid', 'user_id', 'id'], randomUuid),
+      uuid: resolveRequiredValue(settings, ['uuid', 'user_id', 'id'], () => seededUuidValue('uuid')),
       alter_id: Math.max(0, Math.floor(num(settings.alter_id, 0))),
     }
   }
   if (protocol === 'trojan' || protocol === 'hysteria2') {
-    return { password: resolveRequiredValue(settings, ['password'], () => randomHex(16)) }
+    return { password: resolveRequiredValue(settings, ['password'], () => seeded('password', () => randomHex(16), 16)) }
   }
   if (protocol === 'shadowsocks2022') {
     return {
       method: text(settings.method) || '2022-blake3-aes-128-gcm',
-      password: resolveRequiredValue(settings, ['password'], () => randomHex(16)),
+      password: resolveRequiredValue(settings, ['password'], () => seeded('password', () => randomHex(16), 16)),
     }
   }
   throw new Error(`unsupported protocol: ${template.protocol}`)
@@ -115,9 +156,13 @@ function normalizeTemplateSettings(template, sourceSettings, node) {
   const transport = text(template?.transport).toLowerCase()
   const tlsMode = text(template?.tls_mode).toLowerCase()
   const fallbackDomain = node ? text(node.entry_cdn || node.entry_direct) : ''
+  const templateId = text(template?.id || template?.name || 'tpl')
+  const nodeId = node ? text(node.id) : ''
+  const nodeToken = node ? text(node.token) : ''
+  const credentialSeed = nodeId && nodeToken ? `${nodeId}:${nodeToken}:${templateId}:${protocol}` : ''
 
   if (protocol === 'vless' || protocol === 'vmess') {
-    const user = toUser(template, settings)
+    const user = toUser(template, settings, credentialSeed)
     settings.uuid = user.uuid
     if (protocol === 'vless' && transport !== 'tcp') {
       // Flow is only meaningful for VLESS over plain TCP/raw branches.
@@ -130,10 +175,10 @@ function normalizeTemplateSettings(template, sourceSettings, node) {
       if (!text(settings.encryption)) settings.encryption = 'auto'
     }
   } else if (protocol === 'trojan' || protocol === 'hysteria2') {
-    const user = toUser(template, settings)
+    const user = toUser(template, settings, credentialSeed)
     settings.password = user.password
   } else if (protocol === 'shadowsocks2022') {
-    const user = toUser(template, settings)
+    const user = toUser(template, settings, credentialSeed)
     settings.method = user.method
     settings.password = user.password
   }
