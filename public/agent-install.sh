@@ -145,7 +145,7 @@ Options:
   --tls-domain-alt <domain>
   --github-mirror <mirror_prefix>   e.g. https://ghproxy.com
   --cf-api-token <token>           Cloudflare API token for DNS validation
-  --install-warp                   install and register warp-go
+  --install-warp                   register WARP (API-first, warp-go fallback)
   --warp-license <key>             WARP+ license key for warp-go registration
   --install-argo                   install cloudflared and start tunnel
   --argo-token <token>             Cloudflare Tunnel token (fixed tunnel)
@@ -427,7 +427,7 @@ else
   log "Argo install not enabled, skipping cloudflared."
 fi
 
-# ---------- Install warp-go + register ----------
+# ---------- WARP register (API first, warp-go fallback) ----------
 WARPGO_BIN=""
 if [[ "$INSTALL_MODE" == "user" ]]; then
   WARPGO_BIN="${HOME}/.local/bin/warp-go"
@@ -435,36 +435,124 @@ else
   WARPGO_BIN="/usr/local/bin/warp-go"
 fi
 
+json_get_string() {
+  # $1=json text, $2=key
+  local json="$1" key="$2"
+  printf '%s' "$json" \
+    | tr -d '\r\n' \
+    | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+    | head -n1 \
+    | sed "s/.*:[[:space:]]*\"//; s/\"$//"
+}
+
+json_get_number() {
+  # $1=json text, $2=key
+  local json="$1" key="$2"
+  printf '%s' "$json" \
+    | tr -d '\r\n' \
+    | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*[0-9][0-9]*" \
+    | head -n1 \
+    | sed 's/.*:[[:space:]]*//'
+}
+
+decode_base64_flexible() {
+  # supports standard + URL-safe base64
+  local input="$1" normalized mod
+  normalized="$(printf '%s' "$input" | tr '_-' '/+')"
+  mod=$((${#normalized} % 4))
+  if [[ "$mod" -eq 2 ]]; then
+    normalized="${normalized}=="
+  elif [[ "$mod" -eq 3 ]]; then
+    normalized="${normalized}="
+  elif [[ "$mod" -eq 1 ]]; then
+    return 1
+  fi
+  printf '%s' "$normalized" | base64 -d 2>/dev/null
+}
+
+get_latest_gitlab_release_tag() {
+  # $1=url-encoded project path, $2=fallback tag
+  local project="$1"
+  local fallback="${2:-}"
+  local api tag
+  api="$(direct_url "https://gitlab.com/api/v4/projects/${project}/releases/permalink/latest")"
+  tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  if [[ -z "$tag" && -n "$fallback" ]]; then
+    warn "Failed to detect latest GitLab release tag, using fallback: $fallback"
+    tag="$fallback"
+  fi
+  echo "$tag"
+}
+
 install_warpgo() {
   if [[ -x "$WARPGO_BIN" ]]; then
     log "warp-go already installed."
     return 0
   fi
 
-  local wg_arch=""
+  local wg_arch="" tar_arch=""
   case "$ARCH" in
-    x86_64|amd64) wg_arch="amd64" ;;
-    aarch64|arm64) wg_arch="arm64" ;;
-    armv7l|armv7) wg_arch="arm" ;;
+    x86_64|amd64) wg_arch="amd64"; tar_arch="amd64" ;;
+    aarch64|arm64) wg_arch="arm64"; tar_arch="arm64" ;;
+    armv7l|armv7) wg_arch="armv7"; tar_arch="armv7" ;;
     *)
       warn "Unsupported architecture for warp-go: $ARCH"
       return 1
       ;;
   esac
 
-  local url
-  url="$(wrap_url "https://gitlab.com/ProjectWARP/warp-go/-/releases/permalink/latest/downloads/warp-go_linux_${wg_arch}")"
+  require_or_install tar tar || { warn "tar is required to install warp-go."; return 1; }
+
+  local tag ver tar_name url
+  tag="$(get_latest_gitlab_release_tag "ProjectWARP%2Fwarp-go" "v1.0.8" || echo "v1.0.8")"
+  [[ -n "$tag" ]] || tag="v1.0.8"
+  ver="${tag#v}"
+  tar_name="warp-go_${ver}_linux_${tar_arch}.tar.gz"
+  url="$(wrap_url "https://gitlab.com/ProjectWARP/warp-go/-/releases/${tag}/downloads/${tar_name}")"
+
+  cleanup_dir="$(mktempdir)"
+  local tgz="${cleanup_dir}/warp-go.tar.gz"
 
   log "Downloading warp-go: $url"
+  curl -fsSL -o "$tgz" "$url" || {
+    warn "Failed to download warp-go release package from: $url"
+    return 1
+  }
+
+  tar -xzf "$tgz" -C "$cleanup_dir" || {
+    warn "Failed to extract warp-go package"
+    return 1
+  }
+
+  local extracted=""
+  if [[ -f "${cleanup_dir}/warp-go" ]]; then
+    extracted="${cleanup_dir}/warp-go"
+  else
+    extracted="$(find "$cleanup_dir" -maxdepth 3 -type f -name 'warp-go' 2>/dev/null | head -n1 || true)"
+  fi
+
+  [[ -n "$extracted" && -f "$extracted" ]] || {
+    warn "warp-go binary not found in package"
+    return 1
+  }
+
   mkdir -p "$(dirname "$WARPGO_BIN")" || true
-  curl -fsSL -o "$WARPGO_BIN" "$url" || { warn "Failed to download warp-go"; return 1; }
+  mv "$extracted" "$WARPGO_BIN"
   chmod 755 "$WARPGO_BIN"
   log "warp-go installed to: $WARPGO_BIN"
 }
 
-register_warp() {
-  [[ -x "$WARPGO_BIN" ]] || { warn "warp-go not installed, skipping WARP registration"; return 1; }
+save_warp_runtime() {
+  # $1=warp_dir, $2=private_key, $3=v6, $4=reserved, $5=endpoint, $6=status
+  local warp_dir="$1" pvk="$2" v6="$3" reserved="$4" endpoint="$5" status="$6"
+  echo "$pvk" > "$warp_dir/private_key"
+  echo "$v6" > "$warp_dir/v6"
+  echo "$reserved" > "$warp_dir/reserved"
+  echo "$endpoint" > "$warp_dir/endpoint"
+  echo "$status" > "$STATE_DIR/warp-status"
+}
 
+register_warp_via_api() {
   local warp_dir="$STATE_DIR/warp"
   mkdir -p "$warp_dir"
 
@@ -474,19 +562,120 @@ register_warp() {
     return 0
   fi
 
-  log "Registering WARP account..."
+  local wg_bin
+  wg_bin="$(command -v wg 2>/dev/null || true)"
+  if [[ -z "$wg_bin" ]]; then
+    # API registration requires local WireGuard keypair generation.
+    if ! require_or_install wg wireguard-tools; then
+      warn "wg command unavailable; API registration skipped."
+      return 1
+    fi
+    wg_bin="$(command -v wg 2>/dev/null || true)"
+  fi
+  [[ -n "$wg_bin" ]] || { warn "wg command unavailable after install attempt."; return 1; }
+
+  local reg_api resp reg_payload pvk pubk tos serial
+  local device_id access_token v6 host port endpoint client_id_b64 reserved
+  local warp_conf
+  reg_api="https://api.cloudflareclient.com/v0a4005/reg"
+  warp_conf="$warp_dir/warp.conf"
+
+  pvk="$("$wg_bin" genkey 2>/dev/null || true)"
+  [[ -n "$pvk" ]] || { warn "Failed to generate WireGuard private key for API registration."; return 1; }
+  pubk="$(printf '%s' "$pvk" | "$wg_bin" pubkey 2>/dev/null || true)"
+  [[ -n "$pubk" ]] || { warn "Failed to derive WireGuard public key for API registration."; return 1; }
+
+  tos="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  serial="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+  [[ -n "$serial" ]] || serial="$(date +%s)-$RANDOM"
+
+  reg_payload="$(printf '{"key":"%s","install_id":"","fcm_token":"","tos":"%s","model":"PC","serial_number":"%s","locale":"en_US","warp_enabled":true}' "$pubk" "$tos" "$serial")"
+  log "Registering WARP via Cloudflare API..."
+  resp="$(curl -fsS "$reg_api" \
+    -X POST \
+    -H "Content-Type: application/json; charset=UTF-8" \
+    -H "Accept: application/json" \
+    -H "User-Agent: okhttp/3.12.1" \
+    -H "CF-Client-Version: a-6.30-3596" \
+    --data "$reg_payload" 2>/dev/null || true)"
+
+  [[ -n "$resp" ]] || { warn "WARP API registration request failed."; return 1; }
+
+  device_id="$(json_get_string "$resp" "id")"
+  access_token="$(json_get_string "$resp" "token")"
+  v6="$(json_get_string "$resp" "v6")"
+  host="$(json_get_string "$resp" "host")"
+  port="$(json_get_number "$resp" "port")"
+  client_id_b64="$(json_get_string "$resp" "client_id")"
+
+  [[ -n "$device_id" && -n "$access_token" ]] || {
+    warn "WARP API registration response missing id/token."
+    return 1
+  }
+
+  if [[ -n "$WARP_LICENSE" ]]; then
+    local license_payload
+    license_payload="$(printf '{"license":"%s"}' "$WARP_LICENSE")"
+    curl -fsS "${reg_api}/${device_id}/account" \
+      -X PUT \
+      -H "Content-Type: application/json; charset=UTF-8" \
+      -H "Accept: application/json" \
+      -H "Authorization: Bearer ${access_token}" \
+      --data "$license_payload" >/dev/null 2>&1 || warn "WARP API license upgrade failed (continuing with free)."
+  fi
+
+  v6="${v6%%/*}"
+  [[ -n "$v6" ]] || v6="2606:4700:110:8d8d:1845:c39f:2dd5:a03a"
+  [[ -n "$host" ]] || host="engage.cloudflareclient.com"
+  [[ -n "$port" ]] || port="2408"
+  endpoint="${host}:${port}"
+
+  reserved="0,0,0"
+  if [[ -n "$client_id_b64" ]] && need_cmd od && need_cmd base64; then
+    local bytes b1 b2 b3
+    bytes="$(decode_base64_flexible "$client_id_b64" | od -An -t u1 2>/dev/null | tr -s ' ' | sed 's/^ //')"
+    b1="$(echo "$bytes" | awk '{print $1}')"
+    b2="$(echo "$bytes" | awk '{print $2}')"
+    b3="$(echo "$bytes" | awk '{print $3}')"
+    if [[ -n "$b1" && -n "$b2" && -n "$b3" ]]; then
+      reserved="${b1},${b2},${b3}"
+    fi
+  fi
+
+  cat > "$warp_conf" <<EOF
+PrivateKey = ${pvk}
+Address6 = ${v6}/128
+Endpoint = ${endpoint}
+Reserved = ${reserved}
+DeviceID = ${device_id}
+Token = ${access_token}
+EOF
+
+  save_warp_runtime "$warp_dir" "$pvk" "$v6" "$reserved" "$endpoint" "registered_api"
+  log "WARP registered via API: v6=$v6 endpoint=$endpoint"
+  return 0
+}
+
+register_warp_with_warpgo() {
+  [[ -x "$WARPGO_BIN" ]] || { warn "warp-go not installed, skip fallback registration."; return 1; }
+  local warp_dir="$STATE_DIR/warp"
+  mkdir -p "$warp_dir"
+
+  if [[ -f "$warp_dir/warp.conf" && -f "$warp_dir/private_key" ]]; then
+    log "WARP already registered, skipping fallback."
+    return 0
+  fi
+
+  log "Registering WARP account via warp-go fallback..."
   local warp_conf="$warp_dir/warp.conf"
 
-  # Register new account
   if ! "$WARPGO_BIN" --register --config "$warp_conf" 2>/dev/null; then
-    warn "WARP registration failed"
+    warn "warp-go registration failed"
     return 1
   fi
 
-  # Upgrade with license if provided
   if [[ -n "$WARP_LICENSE" ]]; then
-    log "Upgrading WARP account with license..."
-    # Update license in config
+    log "Upgrading WARP account with license via warp-go..."
     if grep -q '^LicenseKey' "$warp_conf" 2>/dev/null; then
       sedi "s/^LicenseKey.*/LicenseKey = ${WARP_LICENSE}/" "$warp_conf"
     else
@@ -495,27 +684,23 @@ register_warp() {
     "$WARPGO_BIN" --update --config "$warp_conf" 2>/dev/null || warn "WARP license upgrade failed (continuing with free)"
   fi
 
-  # Extract keys from warp.conf
   local pvk v6 reserved endpoint
   pvk="$(grep -oP '(?<=PrivateKey = ).*' "$warp_conf" 2>/dev/null || true)"
   v6="$(grep -oP '(?<=Address6 = )[^/]+' "$warp_conf" 2>/dev/null || true)"
   endpoint="$(grep -oP '(?<=Endpoint = ).*' "$warp_conf" 2>/dev/null || echo 'engage.cloudflareclient.com:2408')"
   reserved="$(grep -oP '(?<=Reserved = ).*' "$warp_conf" 2>/dev/null || echo '0,0,0')"
 
-  # Save extracted keys for heartbeat reporting
-  echo "$pvk" > "$warp_dir/private_key"
-  echo "$v6" > "$warp_dir/v6"
-  echo "$reserved" > "$warp_dir/reserved"
-  echo "$endpoint" > "$warp_dir/endpoint"
-  echo "registered" > "$STATE_DIR/warp-status"
-
+  save_warp_runtime "$warp_dir" "$pvk" "$v6" "$reserved" "$endpoint" "registered"
   log "WARP registered: v6=$v6 endpoint=$endpoint"
 }
 
 if [[ "$INSTALL_WARP" -eq 1 ]]; then
-  log "Installing warp-go and registering WARP..."
-  install_warpgo || true
-  register_warp || true
+  log "Registering WARP (API first, warp-go fallback)..."
+  if ! register_warp_via_api; then
+    warn "WARP API registration failed, switching to warp-go fallback."
+    install_warpgo || true
+    register_warp_with_warpgo || true
+  fi
 fi
 
 # ---------- Start Argo tunnel ----------
