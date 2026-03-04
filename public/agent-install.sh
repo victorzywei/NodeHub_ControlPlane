@@ -552,14 +552,73 @@ save_warp_runtime() {
   echo "$status" > "$STATE_DIR/warp-status"
 }
 
+normalize_warp_v6() {
+  # Normalize v6 text to plain IPv6 host without [] / port / cidr.
+  local raw="$1" value
+  value="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  value="${value%%/*}"
+
+  # [IPv6]:port or [IPv6]
+  if [[ "$value" =~ ^\[([0-9A-Fa-f:]+)\](:[0-9]+)?$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  # A malformed API value was observed as "[IPv6]:0" and similar.
+  if [[ "$value" == \[*\]:* ]]; then
+    value="${value#\[}"
+    value="${value%%\]:*}"
+  fi
+  printf '%s' "$value"
+}
+
+normalize_warp_endpoint() {
+  # $1=hostCandidate $2=portCandidate
+  local host_raw="$1" port_raw="$2" host port
+  host="$(printf '%s' "$host_raw" | tr -d '[:space:]')"
+  port="$(printf '%s' "$port_raw" | tr -d '[:space:]')"
+
+  # [host]:port
+  if [[ "$host" =~ ^\[(.+)\]:([0-9]+)$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    [[ -z "$port" ]] && port="${BASH_REMATCH[2]}"
+  elif [[ "$host" =~ ^(.+):([0-9]+)$ ]]; then
+    # host:port (only split when exactly one colon => avoid raw IPv6 ambiguity)
+    if [[ "$host" != *:*:* ]]; then
+      host="${BASH_REMATCH[1]}"
+      [[ -z "$port" ]] && port="${BASH_REMATCH[2]}"
+    fi
+  fi
+
+  [[ -n "$host" ]] || host="engage.cloudflareclient.com"
+  if [[ -z "$port" || ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
+    port="2408"
+  fi
+  printf '%s:%s' "$host" "$port"
+}
+
+is_warp_runtime_valid() {
+  local warp_dir="$1" pvk v6 endpoint
+  pvk="$(cat "$warp_dir/private_key" 2>/dev/null || true)"
+  v6="$(cat "$warp_dir/v6" 2>/dev/null || true)"
+  endpoint="$(cat "$warp_dir/endpoint" 2>/dev/null || true)"
+  [[ -n "$pvk" ]] || return 1
+  [[ -n "$v6" ]] || return 1
+  [[ -n "$endpoint" ]] || return 1
+  [[ "$endpoint" =~ :[0-9]+$ ]] || return 1
+  return 0
+}
+
 register_warp_via_api() {
   local warp_dir="$STATE_DIR/warp"
   mkdir -p "$warp_dir"
 
   # Skip if already registered
-  if [[ -f "$warp_dir/warp.conf" && -f "$warp_dir/private_key" ]]; then
+  if [[ -f "$warp_dir/warp.conf" && -f "$warp_dir/private_key" ]] && is_warp_runtime_valid "$warp_dir"; then
     log "WARP already registered, skipping."
     return 0
+  elif [[ -f "$warp_dir/warp.conf" || -f "$warp_dir/private_key" ]]; then
+    warn "Existing WARP runtime looks invalid, re-registering."
   fi
 
   local wg_bin
@@ -624,11 +683,9 @@ register_warp_via_api() {
       --data "$license_payload" >/dev/null 2>&1 || warn "WARP API license upgrade failed (continuing with free)."
   fi
 
-  v6="${v6%%/*}"
+  v6="$(normalize_warp_v6 "$v6")"
   [[ -n "$v6" ]] || v6="2606:4700:110:8d8d:1845:c39f:2dd5:a03a"
-  [[ -n "$host" ]] || host="engage.cloudflareclient.com"
-  [[ -n "$port" ]] || port="2408"
-  endpoint="${host}:${port}"
+  endpoint="$(normalize_warp_endpoint "$host" "$port")"
 
   reserved="0,0,0"
   if [[ -n "$client_id_b64" ]] && need_cmd od && need_cmd base64; then
@@ -661,9 +718,11 @@ register_warp_with_warpgo() {
   local warp_dir="$STATE_DIR/warp"
   mkdir -p "$warp_dir"
 
-  if [[ -f "$warp_dir/warp.conf" && -f "$warp_dir/private_key" ]]; then
+  if [[ -f "$warp_dir/warp.conf" && -f "$warp_dir/private_key" ]] && is_warp_runtime_valid "$warp_dir"; then
     log "WARP already registered, skipping fallback."
     return 0
+  elif [[ -f "$warp_dir/warp.conf" || -f "$warp_dir/private_key" ]]; then
+    warn "Existing WARP runtime looks invalid, continuing fallback registration."
   fi
 
   log "Registering WARP account via warp-go fallback..."
@@ -689,6 +748,8 @@ register_warp_with_warpgo() {
   v6="$(grep -oP '(?<=Address6 = )[^/]+' "$warp_conf" 2>/dev/null || true)"
   endpoint="$(grep -oP '(?<=Endpoint = ).*' "$warp_conf" 2>/dev/null || echo 'engage.cloudflareclient.com:2408')"
   reserved="$(grep -oP '(?<=Reserved = ).*' "$warp_conf" 2>/dev/null || echo '0,0,0')"
+  v6="$(normalize_warp_v6 "$v6")"
+  endpoint="$(normalize_warp_endpoint "$endpoint" "")"
 
   save_warp_runtime "$warp_dir" "$pvk" "$v6" "$reserved" "$endpoint" "registered"
   log "WARP registered: v6=$v6 endpoint=$endpoint"
