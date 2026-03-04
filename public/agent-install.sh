@@ -1050,20 +1050,68 @@ enqueue_apply_event() {
     "$status" "$code_json" "$msg" "$target_json" "$current_json" >> "$EVENTS_FILE"
 }
 
+POST_EVENTS_HTTP=""
+POST_EVENTS_BODY=""
+post_events_payload() {
+  local payload="$1"
+  local tmp status body
+  tmp="$(mktemp 2>/dev/null || mktemp -t nodehub-events)"
+  status="$(curl -sS --max-time 15 -o "$tmp" -w "%{http_code}" -X POST "$API_BASE/agent/events" \
+      -H "X-Node-Token: $NODE_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null || echo "000")"
+  body="$(tr -d '\r\n' < "$tmp" 2>/dev/null | head -c 240)"
+  rm -f "$tmp"
+  POST_EVENTS_HTTP="$status"
+  POST_EVENTS_BODY="$body"
+  [[ "$status" =~ ^2 ]]
+}
+
 flush_pending_events() {
   [[ -s "$EVENTS_FILE" ]] || return 0
   local event_rows payload
   event_rows="$(awk 'NF { if (c++ > 0) printf(","); printf("%s", $0) } END { print "" }' "$EVENTS_FILE")"
   [[ -n "$event_rows" ]] || return 0
   payload="{\"node_id\":\"$NODE_ID\",\"events\":[$event_rows]}"
-  if curl -fsS --max-time 15 -X POST "$API_BASE/agent/events" \
-      -H "X-Node-Token: $NODE_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "$payload" >/dev/null; then
+
+  if post_events_payload "$payload"; then
     : > "$EVENTS_FILE"
+    clear_last_error
     return 0
   fi
-  set_last_error "pending events flush failed"
+
+  # If batch payload is malformed (HTTP 400), retry per-line to isolate and drop bad rows.
+  if [[ "$POST_EVENTS_HTTP" == "400" ]]; then
+    local tmp_file line line_payload kept=0 dropped=0
+    tmp_file="$(mktemp 2>/dev/null || mktemp -t nodehub-events-keep)"
+    : > "$tmp_file"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -n "${line//[[:space:]]/}" ]] || continue
+      line_payload="{\"node_id\":\"$NODE_ID\",\"events\":[${line}]}"
+      if post_events_payload "$line_payload"; then
+        continue
+      fi
+      if [[ "$POST_EVENTS_HTTP" == "400" ]]; then
+        dropped=$((dropped + 1))
+        continue
+      fi
+      printf '%s\n' "$line" >> "$tmp_file"
+      kept=$((kept + 1))
+    done < "$EVENTS_FILE"
+
+    mv "$tmp_file" "$EVENTS_FILE"
+    if [[ "$kept" -eq 0 ]]; then
+      if [[ "$dropped" -gt 0 ]]; then
+        set_last_error "pending events flushed with dropped malformed rows: ${dropped}"
+      else
+        clear_last_error
+      fi
+      return 0
+    fi
+  fi
+
+  set_last_error "pending events flush failed: http=${POST_EVENTS_HTTP}; body=${POST_EVENTS_BODY}"
   return 1
 }
 
@@ -1117,11 +1165,18 @@ reconcile_once() {
   local current_version response target_version needs_update artifact_url artifact_sha256 reload_cmd
   current_version="$(read_current_version)"
 
-  response="$(curl -fsS --max-time 20 "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
-    -H "X-Node-Token: $NODE_TOKEN")" || {
-    set_last_error "reconcile request failed"
+  local rc_file rc_http rc_body
+  rc_file="$(mktemp 2>/dev/null || mktemp -t nodehub-reconcile)"
+  rc_http="$(curl -sS --max-time 20 -o "$rc_file" -w "%{http_code}" \
+    "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$current_version" \
+    -H "X-Node-Token: $NODE_TOKEN" 2>/dev/null || echo "000")"
+  response="$(cat "$rc_file" 2>/dev/null || true)"
+  rm -f "$rc_file"
+  if [[ ! "$rc_http" =~ ^2 ]]; then
+    rc_body="$(printf '%s' "$response" | tr -d '\r\n' | head -c 240)"
+    set_last_error "reconcile request failed: http=${rc_http}; body=${rc_body}"
     return 1
-  }
+  fi
 
   target_version="$(json_number_field "target_version" "$response")"
   needs_update="$(json_bool_field "needs_update" "$response")"
@@ -1149,17 +1204,41 @@ reconcile_once() {
 }
 
 heartbeat_loop() {
+  local backoff=0
   while true; do
-    heartbeat_once || true
-    sleep "$HEARTBEAT_INTERVAL"
+    if heartbeat_once; then
+      backoff=0
+    else
+      backoff=$((backoff + 1))
+    fi
+    local wait="$HEARTBEAT_INTERVAL"
+    if [[ "$backoff" -gt 0 ]]; then
+      # Exponential backoff: base * 2^(failures-1), capped at 300s
+      local extra=$((HEARTBEAT_INTERVAL * (1 << (backoff > 5 ? 5 : backoff - 1)) ))
+      [[ "$extra" -gt 300 ]] && extra=300
+      wait="$extra"
+    fi
+    sleep "$wait"
   done
 }
 
 reconcile_loop() {
+  local backoff=0
   while true; do
     flush_pending_events || true
-    reconcile_once || true
-    sleep "$RECONCILE_INTERVAL"
+    if reconcile_once; then
+      backoff=0
+    else
+      backoff=$((backoff + 1))
+    fi
+    local wait="$RECONCILE_INTERVAL"
+    if [[ "$backoff" -gt 0 ]]; then
+      # Exponential backoff: base * 2^(failures-1), capped at 300s
+      local extra=$((RECONCILE_INTERVAL * (1 << (backoff > 5 ? 5 : backoff - 1)) ))
+      [[ "$extra" -gt 300 ]] && extra=300
+      wait="$extra"
+    fi
+    sleep "$wait"
   done
 }
 
@@ -1600,13 +1679,13 @@ cat > "$HEARTBEAT_SERVICE" <<EOF
 Description=NodeHub Heartbeat Loop
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=$RUNNER_SCRIPT heartbeat
 Restart=always
 RestartSec=2
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=$SYSTEMD_TARGET
@@ -1617,13 +1696,13 @@ cat > "$RECONCILE_SERVICE" <<EOF
 Description=NodeHub Reconcile Loop
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=$RUNNER_SCRIPT reconcile
 Restart=always
 RestartSec=2
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=$SYSTEMD_TARGET
