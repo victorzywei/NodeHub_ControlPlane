@@ -497,15 +497,11 @@ function buildSingboxConfig(templates, params, node) {
         },
       ],
     })
-    outbounds.push({
-      type: 'direct',
-      tag: 'warp-out',
-      detour: 'warp-ep',
-    })
     route.rules = [
       { action: 'sniff' },
       { action: 'resolve', strategy: 'prefer_ipv4' },
-      { ip_cidr: warp.ipCidrs, outbound: 'warp-out' },
+      // In sing-box >= 1.11, endpoint tags can be used as route outbounds directly.
+      { ip_cidr: warp.ipCidrs, outbound: 'warp-ep' },
     ]
   }
 

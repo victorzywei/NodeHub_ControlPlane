@@ -181,11 +181,7 @@ export async function onRequestPost({ request, env }) {
     }
 
     const versions = resolveEventVersion(node, event)
-    if (
-      versions.targetVersion <= 0 ||
-      versions.currentVersion !== versions.targetVersion ||
-      versions.targetVersion !== versions.nodeTargetVersion
-    ) {
+    if (versions.targetVersion <= 0 || versions.targetVersion !== versions.nodeTargetVersion) {
       rejected += 1
       continue
     }
