@@ -840,6 +840,7 @@ GITHUB_MIRROR="$GITHUB_MIRROR"
 CF_API_TOKEN="$CF_API_TOKEN"
 HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
 RECONCILE_INTERVAL="$RECONCILE_INTERVAL"
+INSTALL_MODE="$INSTALL_MODE"
 STATE_DIR="$STATE_DIR"
 AGENT_ROOT="$AGENT_ROOT"
 CONFIG_ROOT="$CONFIG_ROOT"
@@ -1001,12 +1002,20 @@ disk_stats() {
 }
 
 build_heartbeat_payload() {
-  local current_version deploy_info protocol_version error_message cpu_usage
+  local current_version deploy_info protocol_version error_message cpu_usage install_mode
   local memory_used memory_total memory_usage
   local disk_used disk_total disk_usage
   local sing_box_version sing_box_status xray_version xray_status
   current_version="$(read_current_version)"
-  deploy_info="applied_rev=r${current_version}"
+  install_mode="${INSTALL_MODE:-}"
+  if [[ "$install_mode" != "user" && "$install_mode" != "system" ]]; then
+    if [[ "$STATE_DIR" == "${HOME}/.local/share/nodehub-agent" ]]; then
+      install_mode="user"
+    else
+      install_mode="system"
+    fi
+  fi
+  deploy_info="applied_rev=r${current_version}; install_mode=${install_mode}"
   sing_box_version="$(engine_version "sing-box")"
   xray_version="$(engine_version "xray")"
   protocol_version="${sing_box_version:-$xray_version}"

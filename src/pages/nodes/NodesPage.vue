@@ -320,170 +320,176 @@ function quoteShell(value: string): string {
   return `'${String(value || '').replace(/'/g, `'\"'\"'`)}'`
 }
 
+type AgentInstallMode = 'system' | 'user'
+
+function resolveAgentInstallMode(node: NodeRecord): AgentInstallMode {
+  const deployInfo = String(node.deploy_info || '')
+  const modeMatch = deployInfo.match(/(?:^|[;,\s])install_mode=(user|system)(?:$|[;,\s])/i)
+  if (modeMatch && modeMatch[1]) {
+    return modeMatch[1].toLowerCase() === 'user' ? 'user' : 'system'
+  }
+
+  const legacyMatch = deployInfo.match(/(?:^|[;,\s])mode=(user|system)(?:$|[;,\s])/i)
+  if (legacyMatch && legacyMatch[1]) {
+    return legacyMatch[1].toLowerCase() === 'user' ? 'user' : 'system'
+  }
+
+  return 'system'
+}
+
+function installModeLabel(node: NodeRecord): string {
+  return resolveAgentInstallMode(node)
+}
+
 function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<{ title: string, command: string, copyLabel: string }> {
   const commands: Array<{ title: string, command: string, copyLabel: string }> = []
-  const apiBase = quoteShell(baseUrl)
-  const nodeId = quoteShell(node.id)
-  const nodeToken = quoteShell(node.token || '')
+  const installMode = resolveAgentInstallMode(node)
+  const stateDir = installMode === 'user' ? '"$HOME/.local/share/nodehub-agent"' : '/var/lib/nodehub-agent'
+  const systemctlCmd = installMode === 'user' ? 'systemctl --user' : 'systemctl'
+  const journalctlCmd = installMode === 'user' ? 'journalctl --user' : 'journalctl'
+  const heartbeatUrl = quoteShell(`${baseUrl}/agent/heartbeat?node_id=${encodeURIComponent(node.id)}`)
+  const reconcileUrl = quoteShell(`${baseUrl}/agent/reconcile?node_id=${encodeURIComponent(node.id)}&current_version=${Number.isFinite(node.current_version) ? node.current_version : 0}`)
+  const tokenHeader = quoteShell(`X-Node-Token: ${node.token || ''}`)
   const entryCdn = quoteShell(node.entry_cdn || '')
   const entryDirect = quoteShell(node.entry_direct || '')
-  const entryIp = quoteShell(node.entry_ip || '')
+  const entryResolve = node.entry_cdn && node.entry_ip ? quoteShell(`${node.entry_cdn}:443:${node.entry_ip}`) : ''
+  const entryHttpsUrl = node.entry_cdn ? quoteShell(`https://${node.entry_cdn}`) : ''
 
   commands.push({
-    title: '管理端连接检查（异常自动带错误日志）',
-    copyLabel: '管理端连接检查命令',
-    command: `API_BASE=${apiBase}
-NODE_ID=${nodeId}
-NODE_TOKEN=${nodeToken}
-STATE_DIR=/var/lib/nodehub-agent
-[ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"
-HB_URL="$API_BASE/agent/heartbeat?node_id=$NODE_ID"
-HTTP=""
-BODY=""
-if command -v curl >/dev/null 2>&1; then
-  RAW="$(curl -sS --max-time 12 -w '\\n__HTTP__:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$HB_URL" 2>&1)"
-  RC=$?
-  HTTP="$(printf '%s\\n' "$RAW" | sed -n 's/^__HTTP__://p' | tail -n 1)"
-  BODY="$(printf '%s\\n' "$RAW" | sed '/^__HTTP__:/d')"
-elif command -v wget >/dev/null 2>&1; then
-  RAW="$(wget -S -qO- --header="X-Node-Token: $NODE_TOKEN" --timeout=12 "$HB_URL" 2>&1)"
-  RC=$?
-  HTTP="$(printf '%s\\n' "$RAW" | awk '/^  HTTP\\//{code=$2} END{print code}')"
-  BODY="$(printf '%s\\n' "$RAW" | awk 'BEGIN{s=0} /^$/{s=1;next} {if(s) print}')"
-  [ -n "$BODY" ] || BODY="$RAW"
-else
-  echo "FAIL: 缺少 curl/wget，无法连接管理端"
-  exit 1
-fi
-if [ "$RC" -ne 0 ]; then
-  echo "FAIL: 管理端连接异常"
-  echo "reason=$(printf '%s' "$RAW" | tail -n 1)"
-  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true
-  exit 1
-fi
-if printf '%s' "$BODY" | grep -q '"success":true'; then
-  echo "OK: 管理端连接正常"
-else
-  [ -n "$HTTP" ] || HTTP="unknown"
-  echo "FAIL: 管理端连接异常 (http=$HTTP)"
-  echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-220)"
-  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  ERR_LINE="$(grep -Ei 'error|fail|timeout|unauthorized|forbidden' "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
-  [ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
-fi`,
+    title: '管理端心跳检查',
+    copyLabel: '管理端心跳检查命令',
+    command: `curl -i --max-time 12 -H ${tokenHeader} ${heartbeatUrl}`,
   })
 
   commands.push({
-    title: '拉取与应用检查（异常自动给出原因）',
-    copyLabel: '拉取应用检查命令',
-    command: `API_BASE=${apiBase}
-NODE_ID=${nodeId}
-NODE_TOKEN=${nodeToken}
-STATE_DIR=/var/lib/nodehub-agent
-[ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"
-LOCAL_CUR="$(cat "$STATE_DIR/current-version" 2>/dev/null || echo 0)"
-RC_URL="$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$LOCAL_CUR"
-HTTP=""
-BODY=""
-if command -v curl >/dev/null 2>&1; then
-  RAW="$(curl -sS --max-time 15 -w '\\n__HTTP__:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$RC_URL" 2>&1)"
-  RC=$?
-  HTTP="$(printf '%s\\n' "$RAW" | sed -n 's/^__HTTP__://p' | tail -n 1)"
-  BODY="$(printf '%s\\n' "$RAW" | sed '/^__HTTP__:/d')"
-elif command -v wget >/dev/null 2>&1; then
-  RAW="$(wget -S -qO- --header="X-Node-Token: $NODE_TOKEN" --timeout=15 "$RC_URL" 2>&1)"
-  RC=$?
-  HTTP="$(printf '%s\\n' "$RAW" | awk '/^  HTTP\\//{code=$2} END{print code}')"
-  BODY="$(printf '%s\\n' "$RAW" | awk 'BEGIN{s=0} /^$/{s=1;next} {if(s) print}')"
-  [ -n "$BODY" ] || BODY="$RAW"
-else
-  echo "PULL: FAIL (缺少 curl/wget)"
-  exit 1
-fi
-if [ "$RC" -ne 0 ]; then
-  echo "PULL: FAIL (reconcile 请求失败)"
-  echo "reason=$(printf '%s' "$RAW" | tail -n 1)"
-  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  ERR_LINE="$(grep -Ei 'E_[A-Z_]+|apply failed|error|timeout|unauthorized|forbidden' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
-  [ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
-  exit 1
-fi
-BODY_ONE="$(printf '%s' "$BODY" | tr -d '\\n')"
-TARGET="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"target_version":\\([0-9][0-9]*\\).*/\\1/p')"
-NEEDS="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"needs_update":\\(true\\|false\\).*/\\1/p')"
-ARTIFACT_URL="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"artifact_url":"\\([^"]*\\)".*/\\1/p')"
-ARTIFACT_SHA="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"sha256":"\\([0-9a-fA-F]*\\)".*/\\1/p')"
-if ! printf '%s' "$BODY_ONE" | grep -q '"success":true'; then
-  [ -n "$HTTP" ] || HTTP="unknown"
-  echo "PULL: FAIL (http=$HTTP)"
-  echo "body=$(printf '%s' "$BODY_ONE" | cut -c 1-220)"
-  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  ERR_LINE="$(grep -Ei 'E_[A-Z_]+|apply failed|error|timeout|unauthorized|forbidden|download|hash' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
-  [ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
-  exit 1
-fi
-if [ -z "$TARGET" ]; then
-  echo "PULL: FAIL (返回缺少 target_version)"
-  echo "body=$(printf '%s' "$BODY_ONE" | cut -c 1-380)"
-  exit 1
-fi
-if [ "$NEEDS" = "true" ]; then
-  echo "PULL: OK (target=$TARGET local=$LOCAL_CUR needs_update=true)"
-else
-  echo "PULL: OK (target=$TARGET local=$LOCAL_CUR needs_update=false)"
-fi
-if [ "$LOCAL_CUR" -ge "$TARGET" ]; then
-  echo "APPLY: OK (current=$LOCAL_CUR target=$TARGET)"
-  exit 0
-fi
-echo "APPLY: FAIL (current=$LOCAL_CUR < target=$TARGET)"
-echo "reason=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-ERR_LINE="$(grep -Ei 'E_[A-Z_]+|apply failed|ERROR_CODE|ERROR_MESSAGE|validate|hash|download|json|config|timeout|unauthorized' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
-[ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
-RUNNER=/usr/local/lib/nodehub-agent/agent-runner.sh
-[ -x "$RUNNER" ] || RUNNER="$HOME/.local/lib/nodehub-agent/agent-runner.sh"
-APPLY_HOOK="$(dirname "$RUNNER")/agent-apply.sh"
-if [ ! -x "$APPLY_HOOK" ]; then
-  echo "detail=apply_hook_missing:$APPLY_HOOK"
-  exit 1
-fi
-echo "detail=running_apply_hook_once"
-OUT="$("$APPLY_HOOK" "$TARGET" "$ARTIFACT_URL" "$ARTIFACT_SHA" "nodehub-protocol-restart" 2>&1 || true)"
-printf '%s\\n' "$OUT" | sed -n '/^ERROR_CODE=/p;/^ERROR_MESSAGE=/p;/^ERROR_DETAIL=/p;/^APPLY_DETAIL=/p'
-if printf '%s' "$OUT" | grep -q '^ERROR_CODE=E_VALIDATE'; then
-  REL_DIR="$STATE_DIR/releases/r$TARGET"
-  [ -d "$REL_DIR" ] || REL_DIR="$STATE_DIR/current"
-  if [ -f "$REL_DIR/sing-box.json" ] && command -v sing-box >/dev/null 2>&1; then
-    echo "detail=sing-box check"
-    sing-box check -c "$REL_DIR/sing-box.json" 2>&1 | tail -n 20 || true
-  fi
-  if [ -f "$REL_DIR/xray.json" ] && command -v xray >/dev/null 2>&1; then
-    echo "detail=xray check"
-    xray run -test -config "$REL_DIR/xray.json" 2>&1 | tail -n 20 || true
-  fi
-fi`,
+    title: '拉取配置检查',
+    copyLabel: '拉取配置检查命令',
+    command: `curl -i --max-time 15 -H ${tokenHeader} ${reconcileUrl}`,
   })
 
   commands.push({
-    title: '入口域名与回源连通性',
-    copyLabel: '入口连通命令',
-    command: `ENTRY_CDN=${entryCdn}; ENTRY_DIRECT=${entryDirect}; ENTRY_IP=${entryIp}; for host in "$ENTRY_CDN" "$ENTRY_DIRECT"; do [ -n "$host" ] || continue; echo "== $host =="; (getent ahosts "$host" 2>/dev/null || nslookup "$host" 2>/dev/null || host "$host" 2>/dev/null || true) | head -n 6; done; if [ -n "$ENTRY_CDN" ] && [ -n "$ENTRY_IP" ]; then curl -kI --connect-timeout 8 --resolve "$ENTRY_CDN:443:$ENTRY_IP" "https://$ENTRY_CDN" || true; fi`,
+    title: '服务器状态',
+    copyLabel: '服务器状态命令',
+    command: `${systemctlCmd} status nodehub-heartbeat.service nodehub-reconcile.service --no-pager -l`,
   })
+
+  commands.push({
+    title: '拉取服务日志',
+    copyLabel: '拉取服务日志命令',
+    command: `${journalctlCmd} -u nodehub-reconcile.service -n 200 --no-pager`,
+  })
+
+  commands.push({
+    title: '版本应用状态',
+    copyLabel: '版本应用状态命令',
+    command: `cat ${stateDir}/reconcile.log`,
+  })
+
+  commands.push({
+    title: '版本号状态',
+    copyLabel: '版本号状态命令',
+    command: `cat ${stateDir}/current-version`,
+  })
+
+  commands.push({
+    title: '最近错误摘要',
+    copyLabel: '最近错误摘要命令',
+    command: `cat ${stateDir}/last-error.log`,
+  })
+
+  commands.push({
+    title: 'sing-box 配置',
+    copyLabel: 'sing-box 配置命令',
+    command: `cat ${stateDir}/current/sing-box.json`,
+  })
+
+  commands.push({
+    title: 'sing-box 运行状态',
+    copyLabel: 'sing-box 运行状态命令',
+    command: 'pgrep -fa sing-box',
+  })
+
+  commands.push({
+    title: 'sing-box 运行日志',
+    copyLabel: 'sing-box 日志命令',
+    command: `tail -n 200 ${stateDir}/protocol-sing-box.log`,
+  })
+
+  commands.push({
+    title: 'xray 配置',
+    copyLabel: 'xray 配置命令',
+    command: `cat ${stateDir}/current/xray.json`,
+  })
+
+  commands.push({
+    title: 'xray 运行状态',
+    copyLabel: 'xray 运行状态命令',
+    command: 'pgrep -fa xray',
+  })
+
+  commands.push({
+    title: 'xray 运行日志',
+    copyLabel: 'xray 日志命令',
+    command: `tail -n 200 ${stateDir}/protocol-xray.log`,
+  })
+
+  if (node.entry_cdn) {
+    commands.push({
+      title: '入口 CDN 解析',
+      copyLabel: '入口 CDN 解析命令',
+      command: `nslookup ${entryCdn}`,
+    })
+  }
+
+  if (node.entry_direct) {
+    commands.push({
+      title: '入口 Direct 解析',
+      copyLabel: '入口 Direct 解析命令',
+      command: `nslookup ${entryDirect}`,
+    })
+  }
+
+  if (node.entry_cdn && node.entry_ip) {
+    commands.push({
+      title: '入口回源 HTTPS 检查',
+      copyLabel: '入口回源检查命令',
+      command: `curl -kI --connect-timeout 8 --resolve ${entryResolve} ${entryHttpsUrl}`,
+    })
+  }
 
   if (node.install_warp) {
     commands.push({
-      title: 'WARP 状态排查',
-      copyLabel: 'WARP 排查命令',
-      command: "for C in warp-go ip; do command -v \"$C\" >/dev/null 2>&1 && \"$C\" --version 2>/dev/null | head -n 1 || true; done; pgrep -fa 'warp-go|wireguard|wg' || true; ip -6 addr show 2>/dev/null | sed -n '1,80p'",
+      title: 'WARP 版本检查',
+      copyLabel: 'WARP 版本命令',
+      command: 'warp-go --version',
+    })
+    commands.push({
+      title: 'WARP 进程检查',
+      copyLabel: 'WARP 进程命令',
+      command: "pgrep -fa 'warp-go|wireguard|wg'",
+    })
+    commands.push({
+      title: 'WARP IPv6 地址检查',
+      copyLabel: 'WARP IPv6 命令',
+      command: 'ip -6 addr show',
     })
   }
 
   if (node.install_argo) {
     commands.push({
-      title: 'Argo 隧道排查',
-      copyLabel: 'Argo 排查命令',
-      command: "command -v cloudflared >/dev/null 2>&1 && cloudflared --version || true; pgrep -fa cloudflared || true; [ -f /var/lib/nodehub-agent/cloudflared.pid ] && cat /var/lib/nodehub-agent/cloudflared.pid || true; [ -f \"$HOME/.local/share/nodehub-agent/cloudflared.pid\" ] && cat \"$HOME/.local/share/nodehub-agent/cloudflared.pid\" || true",
+      title: 'Argo 版本检查',
+      copyLabel: 'Argo 版本命令',
+      command: 'cloudflared --version',
+    })
+    commands.push({
+      title: 'Argo 进程检查',
+      copyLabel: 'Argo 进程命令',
+      command: 'pgrep -fa cloudflared',
+    })
+    commands.push({
+      title: 'Argo PID 检查',
+      copyLabel: 'Argo PID 命令',
+      command: `cat ${stateDir}/cloudflared.pid`,
     })
   }
 
@@ -721,9 +727,10 @@ onMounted(loadNodesData)
             <div class="metric-ring-percent">{{ metricPercentText(detailNode.disk_usage_percent) }}</div>
           </div>
           <div class="metric-ring-title">{{ detailNode.disk_used_gb?.toFixed(2) || '--' }} GB / {{ detailNode.disk_total_gb?.toFixed(2) || '--' }} GB</div>
-        </div>
+      </div>
       </div>
       <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
+      <div>安装模式：{{ installModeLabel(detailNode) }}</div>
       <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
       <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
       <div>
