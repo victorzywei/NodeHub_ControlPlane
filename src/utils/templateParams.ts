@@ -19,6 +19,27 @@ export interface TemplateParamField {
   optional?: boolean
 }
 
+const LARGE_PUBLIC_DOMAIN_OPTIONS: TemplateParamOption[] = [
+  { value: 'www.microsoft.com', label: 'www.microsoft.com' },
+  { value: 'www.apple.com', label: 'www.apple.com' },
+  { value: 'www.nvidia.com', label: 'www.nvidia.com' },
+  { value: 'aws.amazon.com', label: 'aws.amazon.com' },
+  { value: 'gateway.icloud.com', label: 'gateway.icloud.com' },
+  { value: 'itunes.apple.com', label: 'itunes.apple.com' },
+  { value: 'www.dbs.com.sg', label: 'www.dbs.com.sg' },
+  { value: 'www.hsbc.com.hk', label: 'www.hsbc.com.hk' },
+]
+
+function hostHintByProtocol(protocol: string): string {
+  if (protocol === 'hysteria2') return '服务器 IP 或域名'
+  return '服务器域名'
+}
+
+function sniHintByProtocol(protocol: string): string {
+  if (protocol === 'hysteria2') return '服务器 IP 或域名'
+  return '服务器域名'
+}
+
 function randomHex(bytes: number): string {
   const array = new Uint8Array(bytes)
   crypto.getRandomValues(array)
@@ -125,10 +146,28 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
 
   if (transport === 'ws') {
     fields.push({ key: 'path', label: 'WS Path', type: 'text', valueType: 'string', defaultValue: '/ws' })
-    fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
+    const hostHint = hostHintByProtocol(protocol)
+    fields.push({
+      key: 'host',
+      label: `Host（${hostHint}）`,
+      type: 'text',
+      valueType: 'string',
+      placeholder: hostHint === '服务器域名' ? 'example.com' : 'example.com 或 1.2.3.4',
+      defaultValue: '',
+      optional: true,
+    })
   } else if (transport === 'httpupgrade' || transport === 'xhttp') {
     fields.push({ key: 'path', label: 'Path', type: 'text', valueType: 'string', defaultValue: '/' })
-    fields.push({ key: 'host', label: 'Host', type: 'text', valueType: 'string', defaultValue: '', optional: true })
+    const hostHint = hostHintByProtocol(protocol)
+    fields.push({
+      key: 'host',
+      label: `Host（${hostHint}）`,
+      type: 'text',
+      valueType: 'string',
+      placeholder: hostHint === '服务器域名' ? 'example.com' : 'example.com 或 1.2.3.4',
+      defaultValue: '',
+      optional: true,
+    })
   } else if (transport === 'grpc') {
     fields.push({ key: 'service_name', label: 'gRPC Service Name', type: 'text', valueType: 'string', defaultValue: 'grpc-service' })
   } else if (transport === 'mkcp') {
@@ -141,25 +180,27 @@ export function getPresetTemplateParamFields(protocol: string, transport: string
 
   if (tlsMode === 'reality') {
     const REALITY_SNI_OPTIONS = [
-      { value: 'www.microsoft.com', label: 'www.microsoft.com' },
-      { value: 'www.apple.com', label: 'www.apple.com' },
-      { value: 'www.nvidia.com', label: 'www.nvidia.com' },
-      { value: 'aws.amazon.com', label: 'aws.amazon.com' },
-      { value: 'gateway.icloud.com', label: 'gateway.icloud.com' },
-      { value: 'itunes.apple.com', label: 'itunes.apple.com' },
-      { value: 'www.dbs.com.sg', label: 'www.dbs.com.sg' },
-      { value: 'www.hsbc.com.hk', label: 'www.hsbc.com.hk' },
+      ...LARGE_PUBLIC_DOMAIN_OPTIONS,
       { value: '', label: '自动跟随节点主域名' }
     ]
     const randomSni = REALITY_SNI_OPTIONS[Math.floor(Math.random() * (REALITY_SNI_OPTIONS.length - 1))].value
 
-    fields.push({ key: 'server_name', label: 'Server Name / SNI', type: 'select', valueType: 'string', options: REALITY_SNI_OPTIONS, defaultValue: randomSni, optional: true })
+    fields.push({ key: 'server_name', label: 'Server Name / SNI（大型公共域名）', type: 'select', valueType: 'string', options: REALITY_SNI_OPTIONS, defaultValue: randomSni, optional: true })
     fields.push({ key: 'reality_private_key', label: 'Reality Private Key', type: 'password', valueType: 'string', secret: true })
     fields.push({ key: 'reality_public_key', label: 'Reality Public Key', type: 'password', valueType: 'string', secret: true })
     fields.push({ key: 'reality_short_id', label: 'Reality Short ID', type: 'password', valueType: 'string', secret: true })
 
   } else if (tlsMode === 'tls') {
-    fields.push({ key: 'sni', label: 'SNI', type: 'text', valueType: 'string', placeholder: 'example.com', defaultValue: '', optional: true })
+    const sniHint = sniHintByProtocol(protocol)
+    fields.push({
+      key: 'sni',
+      label: `SNI（${sniHint}）`,
+      type: 'text',
+      valueType: 'string',
+      placeholder: sniHint === '服务器域名' ? 'example.com' : 'example.com 或 1.2.3.4',
+      defaultValue: '',
+      optional: true,
+    })
   }
 
   return fields
