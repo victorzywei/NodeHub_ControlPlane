@@ -15,7 +15,7 @@ export const router = createRouter({
     { path: '/login', name: 'login', component: LoginPage, meta: { guest: true, title: '登录' } },
     { path: '/overview', name: 'overview', component: OverviewPage, meta: { title: '总览' } },
     { path: '/nodes', name: 'nodes', component: NodesPage, meta: { title: '节点' } },
-    { path: '/templates', name: 'templates', component: TemplatesPage, meta: { title: '配置模板' } },
+    { path: '/templates', name: 'templates', component: TemplatesPage, meta: { title: '协议' } },
     { path: '/subscriptions', name: 'subscriptions', component: SubscriptionsPage, meta: { title: '订阅' } },
     { path: '/system', name: 'system', component: SystemPage, meta: { title: '系统' } },
   ],

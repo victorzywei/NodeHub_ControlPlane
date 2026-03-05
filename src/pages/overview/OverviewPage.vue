@@ -114,7 +114,7 @@ onMounted(load)
 
     <section class="panel panel-pad" style="display: grid; gap: 10px; align-content: start">
       <h3 style="margin: 0">容量概览</h3>
-      <div class="muted">配置模板总数：{{ templateCount }}</div>
+      <div class="muted">协议总数：{{ templateCount }}</div>
       <div class="muted">节点总数：{{ nodes.length }}</div>
       <div class="muted">应用中数量：{{ pendingApply }}</div>
       <div class="muted">最后刷新：{{ new Date().toLocaleTimeString('zh-CN', { hour12: false }) }}</div>

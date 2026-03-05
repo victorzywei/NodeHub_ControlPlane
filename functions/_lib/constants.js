@@ -81,6 +81,22 @@ export const BUILTIN_TEMPLATES = [
     },
   },
   {
+    id: 'tpl_builtin_argo_vmess_tls_ws',
+    kind: 'builtin',
+    name: 'Argo+VMESS+TLS+WS',
+    engine: 'sing-box',
+    protocol: 'vmess',
+    transport: 'ws',
+    tls_mode: 'tls',
+    node_types: ['vps', 'edge'],
+    description: 'Argo 场景 VMESS TLS WebSocket 模板',
+    defaults: {
+      port: 2096,
+      path: '/argo-vmess',
+      host: '',
+    },
+  },
+  {
     id: 'tpl_builtin_trojan_tcp_tls',
     kind: 'builtin',
     name: 'Trojan + TCP + TLS',
