@@ -33,6 +33,8 @@ const detailArgoTokenVisible = ref(false)
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingId = ref('')
+type InstallGroup = 'public_ip' | 'no_public_ip' | 'none'
+const installGroup = ref<InstallGroup>('public_ip')
 const form = reactive({
   name: '',
   node_type: 'vps' as NodeKind,
@@ -107,6 +109,9 @@ function sanitizePublishTemplateIds(ids: string[], nodeType: NodeKind): string[]
 }
 
 function toPayload(): Partial<NodeRecord> {
+  const enableCertInstall = installGroup.value === 'public_ip'
+  const enableArgoInstall = installGroup.value === 'no_public_ip'
+
   return {
     name: form.name.trim(),
     node_type: form.node_type,
@@ -115,7 +120,7 @@ function toPayload(): Partial<NodeRecord> {
       .split(',')
       .map((item: string) => item.trim())
       .filter(Boolean),
-    install_cert: form.install_cert,
+    install_cert: enableCertInstall,
     entry_cdn: form.entry_cdn.trim(),
     entry_direct: form.entry_direct.trim(),
     entry_ip: form.entry_ip.trim(),
@@ -123,10 +128,17 @@ function toPayload(): Partial<NodeRecord> {
     cf_api_token: form.cf_api_token.trim(),
     install_warp: form.install_warp,
     warp_license: form.warp_license.trim(),
-    install_argo: form.install_argo,
+    install_argo: enableArgoInstall,
     argo_token: form.argo_token.trim(),
     argo_domain: form.argo_domain.trim(),
   } as Partial<NodeRecord>
+}
+
+function resolveInstallGroup(node?: NodeRecord): InstallGroup {
+  if (!node) return 'public_ip'
+  if (node.install_argo) return 'no_public_ip'
+  if (node.install_cert) return 'public_ip'
+  return 'none'
 }
 
 function fillForm(node?: NodeRecord): void {
@@ -145,6 +157,7 @@ function fillForm(node?: NodeRecord): void {
   form.install_argo = node?.install_argo || false
   form.argo_token = node?.argo_token || ''
   form.argo_domain = node?.argo_domain || ''
+  installGroup.value = resolveInstallGroup(node)
 }
 
 async function loadNodesData(): Promise<void> {
@@ -581,33 +594,57 @@ onMounted(loadNodesData)
     </label>
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
-      <div style="font-weight: 700; margin-bottom: 10px">证书安装</div>
-      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-        <input type="checkbox" v-model="form.install_cert" />
-        <span>安装域名证书（acme.sh / lego）</span>
-      </label>
+      <div style="font-weight: 700; margin-bottom: 10px">安装分组</div>
       <label>
-        入口 CDN 域名
-        <input v-model="form.entry_cdn" class="input" />
+        选择安装模式
+        <select v-model="installGroup" class="select">
+          <option value="public_ip">有公网 IP</option>
+          <option value="no_public_ip">无公网 IP</option>
+          <option value="none">none（不重复安装）</option>
+        </select>
       </label>
-      <label>
-        入口 Direct 域名
-        <input v-model="form.entry_direct" class="input" />
-      </label>
-      <label>
-        入口 IP
-        <input v-model="form.entry_ip" class="input" />
-      </label>
-      <template v-if="form.install_cert">
+      <div class="muted" style="font-size: 12px; margin-top: 6px">
+        有公网 IP：入口域名 + 入口 IP + 证书安装；无公网 IP：Argo 隧道；none：跳过重复安装。
+      </div>
+      <template v-if="installGroup === 'public_ip'">
+        <label>
+          入口 CDN 域名
+          <input v-model="form.entry_cdn" class="input" />
+        </label>
+        <label>
+          入口 Direct 域名
+          <input v-model="form.entry_direct" class="input" />
+        </label>
+        <label>
+          入口 IP
+          <input v-model="form.entry_ip" class="input" />
+        </label>
         <label>
           Cloudflare API Token (可选)
           <input v-model="form.cf_api_token" class="input" placeholder="用于申请 CF 证书" />
         </label>
+        <div class="muted" style="font-size: 12px">
+          此分组会自动启用证书安装（acme.sh / lego）。
+        </div>
       </template>
-      <div class="muted" style="font-size: 12px">
-        勾选后安装命令会带 --tls-domain / --tls-domain-alt（及可选 --cf-api-token）并尝试签发证书；
-        不勾选时将跳过证书安装，适合二次部署复用已有证书。
-      </div>
+      <template v-else-if="installGroup === 'no_public_ip'">
+        <label>
+          Tunnel Token (可选)
+          <input v-model="form.argo_token" class="input" placeholder="固定隧道 Token，留空使用临时隧道" />
+        </label>
+        <label>
+          域名 (可选)
+          <input v-model="form.argo_domain" class="input" placeholder="固定隧道域名" />
+        </label>
+        <div class="muted" style="font-size: 12px">
+          此分组会自动启用 Argo（cloudflared）隧道安装。
+        </div>
+      </template>
+      <template v-else>
+        <div class="muted" style="font-size: 12px">
+          当前为 none 分组：将跳过证书和 Argo 的重复安装。
+        </div>
+      </template>
     </div>
 
     <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
@@ -624,27 +661,6 @@ onMounted(loadNodesData)
       </template>
       <div class="muted" style="font-size: 12px">
         勾选后安装命令包含 --install-warp；可选填写 License 升级 WARP+。在模板编辑器中勾选"WARP 出口"启用路由。
-      </div>
-    </div>
-
-    <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px">
-      <div style="font-weight: 700; margin-bottom: 10px">Argo 隧道</div>
-      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-        <input type="checkbox" v-model="form.install_argo" />
-        <span>安装 Argo（cloudflared）</span>
-      </label>
-      <template v-if="form.install_argo">
-        <label>
-          Tunnel Token (可选)
-          <input v-model="form.argo_token" class="input" placeholder="固定隧道 Token，留空使用临时隧道" />
-        </label>
-        <label>
-          域名 (可选)
-          <input v-model="form.argo_domain" class="input" placeholder="固定隧道域名" />
-        </label>
-      </template>
-      <div class="muted" style="font-size: 12px">
-        勾选后安装命令包含 --install-argo，并下载官方 cloudflared 二进制。有 Token：固定隧道；无 Token：TryCloudflare 临时隧道。
       </div>
     </div>
 
