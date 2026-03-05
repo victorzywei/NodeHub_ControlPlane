@@ -551,6 +551,27 @@ onMounted(loadNodesData)
           <div class="metric-fill disk" :style="metricBarStyle(detailNode.disk_usage_percent)" />
         </div>
       </div>
+      <div>
+        WARP 状态：
+        <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
+      </div>
+      <div>WARP IPv6：{{ detailNode.warp_v6 || '-' }}</div>
+      <div>WARP Endpoint：{{ detailNode.warp_endpoint || '-' }}</div>
+      <div>
+        Argo 状态：
+        <span class="badge" :class="detailNode.argo_status === 'running' ? 'success' : (detailNode.argo_status ? 'warning' : 'danger')">
+          {{ detailNode.argo_status || '未安装' }}
+        </span>
+      </div>
+      <div>Argo 临时域名：{{ detailNode.argo_temp_domain || '-' }}</div>
+
+      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">版本应用状态</div>
+      <div>
+        应用状态：
+        <span class="badge" :class="releaseStatusClass(detailNode)">{{ releaseStatusText(detailNode) }}</span>
+      </div>
+      <div>应用回执：{{ detailNode.last_release_message || '-' }}</div>
+      <div>失败代码：{{ detailNode.last_release_error_code || '-' }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">节点配置</div>
       <div>类型：{{ detailNode.node_type }}</div>
@@ -560,12 +581,6 @@ onMounted(loadNodesData)
       <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
       <div>协议应用：{{ appliedTemplatesText(detailNode) }}</div>
       <div>发布版本：{{ releaseVersionText(detailNode) }}</div>
-      <div>
-        应用状态：
-        <span class="badge" :class="releaseStatusClass(detailNode)">{{ releaseStatusText(detailNode) }}</span>
-      </div>
-      <div>应用回执：{{ detailNode.last_release_message || '-' }}</div>
-      <div>失败代码：{{ detailNode.last_release_error_code || '-' }}</div>
       <div>节点 Token：{{ detailNode.token || '-' }}</div>
       <div>GitHub 镜像：{{ detailNode.github_mirror || '-' }}</div>
       <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
