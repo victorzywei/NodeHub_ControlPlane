@@ -549,8 +549,6 @@ onMounted(loadNodesData)
       <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
       <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
       <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
-      <div>WARP 安装：{{ detailNode.install_warp ? '已启用' : '未启用' }}</div>
-      <div>Argo 安装：{{ detailNode.install_argo ? '已启用' : '未启用' }}</div>
       <div>
         sing-box：{{ engineVersionText(detailNode.sing_box_version, detailNode.sing_box_status) }}
         <span class="badge" :class="engineStatusClass(detailNode.sing_box_status)">
@@ -564,12 +562,18 @@ onMounted(loadNodesData)
         </span>
       </div>
       <div>
+        WARP 安装：{{ detailNode.install_warp ? '已启用' : '未启用' }}
+      </div>
+      <div>
         WARP 状态：
         <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
       </div>
       <div>WARP IPv6：{{ detailNode.warp_v6 || '-' }}</div>
       <div>WARP Endpoint：{{ detailNode.warp_endpoint || '-' }}</div>
       <div>WARP Reserved：{{ formatWarpReserved(detailNode.warp_reserved) }}</div>
+      <div>
+        Argo 安装：{{ detailNode.install_argo ? '已启用' : '未启用' }}
+      </div>
       <div>
         Argo 状态：
         <span class="badge" :class="detailNode.argo_status === 'running' ? 'success' : (detailNode.argo_status ? 'warning' : 'danger')">
