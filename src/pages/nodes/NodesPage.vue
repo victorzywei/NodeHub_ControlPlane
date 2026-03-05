@@ -736,7 +736,7 @@ onMounted(loadNodesData)
           {{ detailNode.argo_status || '未安装' }}
         </span>
       </div>
-      <div>Argo 临时域名：{{ detailNode.argo_temp_domain || '-' }}</div>
+      <div>Argo 域名：{{ detailNode.argo_temp_domain || detailNode.argo_domain || '-' }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">版本应用状态</div>
       <div>

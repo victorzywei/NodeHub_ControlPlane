@@ -836,6 +836,7 @@ TLS_DOMAIN="$TLS_DOMAIN"
 TLS_DOMAIN_ALT="$TLS_DOMAIN_ALT"
 GITHUB_MIRROR="$GITHUB_MIRROR"
 CF_API_TOKEN="$CF_API_TOKEN"
+ARGO_DOMAIN="$ARGO_DOMAIN"
 ARGO_PORT="$ARGO_PORT"
 HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
 RECONCILE_INTERVAL="$RECONCILE_INTERVAL"
@@ -1086,6 +1087,12 @@ build_heartbeat_payload() {
   fi
   if [[ -f "$STATE_DIR/argo-domain" ]]; then
     argo_temp_domain="$(cat "$STATE_DIR/argo-domain" 2>/dev/null || true)"
+  fi
+  if [[ -z "$argo_temp_domain" && -n "${ARGO_DOMAIN:-}" ]]; then
+    argo_temp_domain="$ARGO_DOMAIN"
+  fi
+  if [[ -z "$argo_temp_domain" && -f "$STATE_DIR/argo.log" ]]; then
+    argo_temp_domain="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo.log" 2>/dev/null | tail -n1 | sed 's|https://||')"
   fi
   argo_json="$(json_escape "$argo_status")"
   argo_domain_json="$(json_escape "$argo_temp_domain")"

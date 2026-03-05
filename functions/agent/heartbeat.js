@@ -64,7 +64,14 @@ async function applyHeartbeat(node, report, kv) {
 
     // Argo status
     if (report.argo_status !== undefined) node.argo_status = toText(report.argo_status, 256)
-    if (report.argo_temp_domain !== undefined) node.argo_temp_domain = toText(report.argo_temp_domain, 256)
+    if (report.argo_temp_domain !== undefined) {
+      const nextArgoDomain = toText(report.argo_temp_domain, 256)
+      if (nextArgoDomain) {
+        node.argo_temp_domain = nextArgoDomain
+      } else if (!node.argo_temp_domain) {
+        node.argo_temp_domain = ''
+      }
+    }
   }
 
   await kvPutJson(kv, KEY.node(node.id), node)
