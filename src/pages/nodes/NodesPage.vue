@@ -367,9 +367,10 @@ if printf '%s' "$BODY" | grep -q '"success":true'; then
 else
   [ -n "$HTTP" ] || HTTP="unknown"
   echo "FAIL: 管理端连接异常 (http=$HTTP)"
-  echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-320)"
+  echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-220)"
   echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true
+  ERR_LINE="$(grep -Ei 'error|fail|timeout|unauthorized|forbidden' "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
+  [ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
 fi`,
   })
 
@@ -404,7 +405,8 @@ if [ "$RC" -ne 0 ]; then
   echo "PULL: FAIL (reconcile 请求失败)"
   echo "reason=$(printf '%s' "$RAW" | tail -n 1)"
   echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  tail -n 80 "$STATE_DIR/reconcile.log" 2>/dev/null || true
+  ERR_LINE="$(grep -Ei 'E_[A-Z_]+|apply failed|error|timeout|unauthorized|forbidden' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
+  [ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
   exit 1
 fi
 BODY_ONE="$(printf '%s' "$BODY" | tr -d '\\n')"
@@ -415,9 +417,10 @@ ARTIFACT_SHA="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"sha256":"\\([0-9a-fA-F]*\
 if ! printf '%s' "$BODY_ONE" | grep -q '"success":true'; then
   [ -n "$HTTP" ] || HTTP="unknown"
   echo "PULL: FAIL (http=$HTTP)"
-  echo "body=$(printf '%s' "$BODY_ONE" | cut -c 1-380)"
+  echo "body=$(printf '%s' "$BODY_ONE" | cut -c 1-220)"
   echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-  grep -Ei 'E_[A-Z_]+|fail|error|timeout|unauthorized|forbidden|download|hash' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 12 || true
+  ERR_LINE="$(grep -Ei 'E_[A-Z_]+|apply failed|error|timeout|unauthorized|forbidden|download|hash' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
+  [ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
   exit 1
 fi
 if [ -z "$TARGET" ]; then
@@ -436,55 +439,29 @@ if [ "$LOCAL_CUR" -ge "$TARGET" ]; then
 fi
 echo "APPLY: FAIL (current=$LOCAL_CUR < target=$TARGET)"
 echo "reason=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
-if [ -n "$ARTIFACT_URL" ]; then echo "artifact_url=$ARTIFACT_URL"; else echo "artifact_url=-"; fi
-if [ -n "$ARTIFACT_SHA" ]; then echo "artifact_sha256=$ARTIFACT_SHA"; else echo "artifact_sha256=-"; fi
+ERR_LINE="$(grep -Ei 'E_[A-Z_]+|apply failed|ERROR_CODE|ERROR_MESSAGE|validate|hash|download|json|config|timeout|unauthorized' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"
+[ -n "$ERR_LINE" ] && echo "hint=$ERR_LINE"
 RUNNER=/usr/local/lib/nodehub-agent/agent-runner.sh
 [ -x "$RUNNER" ] || RUNNER="$HOME/.local/lib/nodehub-agent/agent-runner.sh"
-APPLY_HOOK=/usr/local/lib/nodehub-agent/agent-apply.sh
-[ -x "$APPLY_HOOK" ] || APPLY_HOOK="$HOME/.local/lib/nodehub-agent/agent-apply.sh"
-echo "runner=$RUNNER ($( [ -x "$RUNNER" ] && echo ok || echo missing ))"
-echo "apply_hook=$APPLY_HOOK ($( [ -x "$APPLY_HOOK" ] && echo ok || echo missing ))"
-CUR_LINK="$(readlink "$STATE_DIR/current" 2>/dev/null || echo -)"
-echo "current_link=$CUR_LINK"
-ls -la "$STATE_DIR/releases" "$STATE_DIR/current" 2>/dev/null || true
-echo "--- reconcile 关键日志 ---"
-grep -Ei 'E_[A-Z_]+|apply failed|ERROR_CODE|ERROR_MESSAGE|validate|hash|download|json|config|timeout|unauthorized' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 16 || tail -n 80 "$STATE_DIR/reconcile.log" 2>/dev/null || true
-for LF in "$STATE_DIR/protocol-sing-box.log" "$STATE_DIR/protocol-xray.log"; do
-  [ -f "$LF" ] || continue
-  echo "--- $(basename "$LF") 关键日志 ---"
-  grep -Ei 'error|fail|invalid|panic|certificate|dns|timeout' "$LF" 2>/dev/null | tail -n 12 || tail -n 40 "$LF" 2>/dev/null || true
-done
-if [ -n "$ARTIFACT_URL" ]; then
-  TMP_ART="/tmp/nodehub-artifact.$$"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsS --max-time 20 -H "X-Node-Token: $NODE_TOKEN" "$ARTIFACT_URL" -o "$TMP_ART" >/dev/null 2>&1 || true
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$TMP_ART" --header="X-Node-Token: $NODE_TOKEN" --timeout=20 "$ARTIFACT_URL" >/dev/null 2>&1 || true
-  fi
-  if [ -s "$TMP_ART" ]; then
-    SIZE="$(wc -c < "$TMP_ART" 2>/dev/null || echo -)"
-    echo "artifact_download=ok size=$SIZE"
-    if command -v sha256sum >/dev/null 2>&1; then
-      REAL_SHA="$(sha256sum "$TMP_ART" | awk '{print $1}')"
-      echo "artifact_sha_local=$REAL_SHA"
-      [ -n "$ARTIFACT_SHA" ] && [ "$REAL_SHA" != "$ARTIFACT_SHA" ] && echo "artifact_sha_mismatch=expected:$ARTIFACT_SHA actual:$REAL_SHA"
-    elif command -v shasum >/dev/null 2>&1; then
-      REAL_SHA="$(shasum -a 256 "$TMP_ART" | awk '{print $1}')"
-      echo "artifact_sha_local=$REAL_SHA"
-      [ -n "$ARTIFACT_SHA" ] && [ "$REAL_SHA" != "$ARTIFACT_SHA" ] && echo "artifact_sha_mismatch=expected:$ARTIFACT_SHA actual:$REAL_SHA"
-    fi
-  else
-    echo "artifact_download=failed"
-  fi
-  rm -f "$TMP_ART" 2>/dev/null || true
+APPLY_HOOK="$(dirname "$RUNNER")/agent-apply.sh"
+if [ ! -x "$APPLY_HOOK" ]; then
+  echo "detail=apply_hook_missing:$APPLY_HOOK"
+  exit 1
 fi
-if [ -f "$STATE_DIR/current/sing-box.json" ] && command -v sing-box >/dev/null 2>&1; then
-  echo "--- sing-box check ---"
-  sing-box check -c "$STATE_DIR/current/sing-box.json" 2>&1 | tail -n 30 || true
-fi
-if [ -f "$STATE_DIR/current/xray.json" ] && command -v xray >/dev/null 2>&1; then
-  echo "--- xray check ---"
-  xray run -test -config "$STATE_DIR/current/xray.json" 2>&1 | tail -n 30 || true
+echo "detail=running_apply_hook_once"
+OUT="$("$APPLY_HOOK" "$TARGET" "$ARTIFACT_URL" "$ARTIFACT_SHA" "nodehub-protocol-restart" 2>&1 || true)"
+printf '%s\\n' "$OUT" | sed -n '/^ERROR_CODE=/p;/^ERROR_MESSAGE=/p;/^ERROR_DETAIL=/p;/^APPLY_DETAIL=/p'
+if printf '%s' "$OUT" | grep -q '^ERROR_CODE=E_VALIDATE'; then
+  REL_DIR="$STATE_DIR/releases/r$TARGET"
+  [ -d "$REL_DIR" ] || REL_DIR="$STATE_DIR/current"
+  if [ -f "$REL_DIR/sing-box.json" ] && command -v sing-box >/dev/null 2>&1; then
+    echo "detail=sing-box check"
+    sing-box check -c "$REL_DIR/sing-box.json" 2>&1 | tail -n 20 || true
+  fi
+  if [ -f "$REL_DIR/xray.json" ] && command -v xray >/dev/null 2>&1; then
+    echo "detail=xray check"
+    xray run -test -config "$REL_DIR/xray.json" 2>&1 | tail -n 20 || true
+  fi
 fi`,
   })
 

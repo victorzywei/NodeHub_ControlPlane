@@ -40,6 +40,40 @@ function toNodeOutboundName(node, outbound, index, templateNames) {
   return templateName ? `${nodeName}-${templateName}` : nodeName
 }
 
+function toHost(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      return new URL(raw).hostname || ''
+    } catch {
+      return ''
+    }
+  }
+
+  return raw.replace(/\/.*$/, '').trim()
+}
+
+function firstHost(candidates) {
+  for (const item of candidates) {
+    const host = toHost(item)
+    if (host) return host
+  }
+  return ''
+}
+
+function resolveSubscriptionAddress(node) {
+  // no_public_ip mode should prefer Argo domain
+  const argoHost = firstHost([node?.argo_domain, node?.argo_temp_domain])
+  const publicHost = firstHost([node?.entry_direct, node?.entry_cdn, node?.entry_ip])
+
+  if (node?.install_argo === true) {
+    return argoHost || publicHost || 'unknown'
+  }
+  return publicHost || argoHost || 'unknown'
+}
+
 export async function onRequestGet({ request, env, params }) {
   const url = new URL(request.url)
   const format = String(url.searchParams.get('format') || 'v2ray').toLowerCase()
@@ -67,7 +101,7 @@ export async function onRequestGet({ request, env, params }) {
     for (let index = 0; index < artifact.subscription_outbounds.length; index += 1) {
       const t = artifact.subscription_outbounds[index]
       const s = t.settings || {}
-      const addr = String(node.entry_direct || node.entry_cdn || node.entry_ip || 'unknown').trim()
+      const addr = resolveSubscriptionAddress(node)
 
       outbounds.push({
         name: toNodeOutboundName(node, t, index, templateNames),
