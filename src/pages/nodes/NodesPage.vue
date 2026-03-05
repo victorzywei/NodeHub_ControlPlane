@@ -332,13 +332,160 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   commands.push({
     title: '管理端连接检查（异常自动带错误日志）',
     copyLabel: '管理端连接检查命令',
-    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; STATE_DIR=/var/lib/nodehub-agent; [ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"; RESP="$(curl -sS --max-time 12 -w '\\nHTTP_STATUS:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/heartbeat?node_id=$NODE_ID" 2>&1)"; RC=$?; if [ "$RC" -ne 0 ]; then echo "FAIL: 管理端连接异常"; echo "reason=$(printf '%s' "$RESP" | tail -n 1)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true; exit 1; fi; HTTP="$(printf '%s\\n' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"; BODY="$(printf '%s\\n' "$RESP" | sed '/^HTTP_STATUS:/d')"; if [ "$HTTP" = "200" ] && printf '%s' "$BODY" | grep -q '"success":true'; then echo "OK: 管理端连接正常"; else echo "FAIL: 管理端连接异常 (http=$HTTP)"; echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-260)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true; fi`,
+    command: `API_BASE=${apiBase}
+NODE_ID=${nodeId}
+NODE_TOKEN=${nodeToken}
+STATE_DIR=/var/lib/nodehub-agent
+[ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"
+HB_URL="$API_BASE/agent/heartbeat?node_id=$NODE_ID"
+HTTP=""
+BODY=""
+if command -v curl >/dev/null 2>&1; then
+  RAW="$(curl -sS --max-time 12 -w '\\n__HTTP__:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$HB_URL" 2>&1)"
+  RC=$?
+  HTTP="$(printf '%s\\n' "$RAW" | sed -n 's/^__HTTP__://p' | tail -n 1)"
+  BODY="$(printf '%s\\n' "$RAW" | sed '/^__HTTP__:/d')"
+elif command -v wget >/dev/null 2>&1; then
+  RAW="$(wget -S -qO- --header="X-Node-Token: $NODE_TOKEN" --timeout=12 "$HB_URL" 2>&1)"
+  RC=$?
+  HTTP="$(printf '%s\\n' "$RAW" | awk '/^  HTTP\\//{code=$2} END{print code}')"
+  BODY="$(printf '%s\\n' "$RAW" | awk 'BEGIN{s=0} /^$/{s=1;next} {if(s) print}')"
+  [ -n "$BODY" ] || BODY="$RAW"
+else
+  echo "FAIL: 缺少 curl/wget，无法连接管理端"
+  exit 1
+fi
+if [ "$RC" -ne 0 ]; then
+  echo "FAIL: 管理端连接异常"
+  echo "reason=$(printf '%s' "$RAW" | tail -n 1)"
+  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
+  tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true
+  exit 1
+fi
+if printf '%s' "$BODY" | grep -q '"success":true'; then
+  echo "OK: 管理端连接正常"
+else
+  [ -n "$HTTP" ] || HTTP="unknown"
+  echo "FAIL: 管理端连接异常 (http=$HTTP)"
+  echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-320)"
+  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
+  tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true
+fi`,
   })
 
   commands.push({
     title: '拉取与应用检查（异常自动给出原因）',
     copyLabel: '拉取应用检查命令',
-    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; STATE_DIR=/var/lib/nodehub-agent; [ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"; LOCAL_CUR="$(cat "$STATE_DIR/current-version" 2>/dev/null || echo 0)"; RESP="$(curl -sS --max-time 12 -w '\\nHTTP_STATUS:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$LOCAL_CUR" 2>&1)"; RC=$?; if [ "$RC" -ne 0 ]; then echo "PULL: FAIL (reconcile 请求失败)"; echo "reason=$(printf '%s' "$RESP" | tail -n 1)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 60 "$STATE_DIR/reconcile.log" 2>/dev/null || true; exit 1; fi; HTTP="$(printf '%s\\n' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"; BODY="$(printf '%s\\n' "$RESP" | sed '/^HTTP_STATUS:/d')"; TARGET="$(printf '%s' "$BODY" | tr -d '\\n' | sed -n 's/.*"target_version":\\([0-9][0-9]*\\).*/\\1/p')"; NEEDS="$(printf '%s' "$BODY" | tr -d '\\n' | sed -n 's/.*"needs_update":\\(true\\|false\\).*/\\1/p')"; if [ "$HTTP" != "200" ] || ! printf '%s' "$BODY" | grep -q '"success":true'; then echo "PULL: FAIL (http=$HTTP)"; echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-260)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 60 "$STATE_DIR/reconcile.log" 2>/dev/null || true; exit 1; fi; if [ -z "$TARGET" ]; then echo "PULL: FAIL (返回缺少 target_version)"; echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-260)"; exit 1; fi; if [ "$NEEDS" = "true" ]; then echo "PULL: OK (已拉到新版本信息 target=$TARGET local=$LOCAL_CUR)"; else echo "PULL: OK (已是最新 target=$TARGET local=$LOCAL_CUR)"; fi; if [ "$LOCAL_CUR" -ge "$TARGET" ]; then echo "APPLY: OK (current=$LOCAL_CUR target=$TARGET)"; else echo "APPLY: FAIL (current=$LOCAL_CUR < target=$TARGET)"; echo "reason=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; LOG_REASON="$(grep -E 'apply failed|E_[A-Z_]+' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"; [ -n "$LOG_REASON" ] && echo "reconcile_log=$LOG_REASON"; fi`,
+    command: `API_BASE=${apiBase}
+NODE_ID=${nodeId}
+NODE_TOKEN=${nodeToken}
+STATE_DIR=/var/lib/nodehub-agent
+[ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"
+LOCAL_CUR="$(cat "$STATE_DIR/current-version" 2>/dev/null || echo 0)"
+RC_URL="$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$LOCAL_CUR"
+HTTP=""
+BODY=""
+if command -v curl >/dev/null 2>&1; then
+  RAW="$(curl -sS --max-time 15 -w '\\n__HTTP__:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$RC_URL" 2>&1)"
+  RC=$?
+  HTTP="$(printf '%s\\n' "$RAW" | sed -n 's/^__HTTP__://p' | tail -n 1)"
+  BODY="$(printf '%s\\n' "$RAW" | sed '/^__HTTP__:/d')"
+elif command -v wget >/dev/null 2>&1; then
+  RAW="$(wget -S -qO- --header="X-Node-Token: $NODE_TOKEN" --timeout=15 "$RC_URL" 2>&1)"
+  RC=$?
+  HTTP="$(printf '%s\\n' "$RAW" | awk '/^  HTTP\\//{code=$2} END{print code}')"
+  BODY="$(printf '%s\\n' "$RAW" | awk 'BEGIN{s=0} /^$/{s=1;next} {if(s) print}')"
+  [ -n "$BODY" ] || BODY="$RAW"
+else
+  echo "PULL: FAIL (缺少 curl/wget)"
+  exit 1
+fi
+if [ "$RC" -ne 0 ]; then
+  echo "PULL: FAIL (reconcile 请求失败)"
+  echo "reason=$(printf '%s' "$RAW" | tail -n 1)"
+  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
+  tail -n 80 "$STATE_DIR/reconcile.log" 2>/dev/null || true
+  exit 1
+fi
+BODY_ONE="$(printf '%s' "$BODY" | tr -d '\\n')"
+TARGET="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"target_version":\\([0-9][0-9]*\\).*/\\1/p')"
+NEEDS="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"needs_update":\\(true\\|false\\).*/\\1/p')"
+ARTIFACT_URL="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"artifact_url":"\\([^"]*\\)".*/\\1/p')"
+ARTIFACT_SHA="$(printf '%s' "$BODY_ONE" | sed -n 's/.*"sha256":"\\([0-9a-fA-F]*\\)".*/\\1/p')"
+if ! printf '%s' "$BODY_ONE" | grep -q '"success":true'; then
+  [ -n "$HTTP" ] || HTTP="unknown"
+  echo "PULL: FAIL (http=$HTTP)"
+  echo "body=$(printf '%s' "$BODY_ONE" | cut -c 1-380)"
+  echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
+  grep -Ei 'E_[A-Z_]+|fail|error|timeout|unauthorized|forbidden|download|hash' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 12 || true
+  exit 1
+fi
+if [ -z "$TARGET" ]; then
+  echo "PULL: FAIL (返回缺少 target_version)"
+  echo "body=$(printf '%s' "$BODY_ONE" | cut -c 1-380)"
+  exit 1
+fi
+if [ "$NEEDS" = "true" ]; then
+  echo "PULL: OK (target=$TARGET local=$LOCAL_CUR needs_update=true)"
+else
+  echo "PULL: OK (target=$TARGET local=$LOCAL_CUR needs_update=false)"
+fi
+if [ "$LOCAL_CUR" -ge "$TARGET" ]; then
+  echo "APPLY: OK (current=$LOCAL_CUR target=$TARGET)"
+  exit 0
+fi
+echo "APPLY: FAIL (current=$LOCAL_CUR < target=$TARGET)"
+echo "reason=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"
+if [ -n "$ARTIFACT_URL" ]; then echo "artifact_url=$ARTIFACT_URL"; else echo "artifact_url=-"; fi
+if [ -n "$ARTIFACT_SHA" ]; then echo "artifact_sha256=$ARTIFACT_SHA"; else echo "artifact_sha256=-"; fi
+RUNNER=/usr/local/lib/nodehub-agent/agent-runner.sh
+[ -x "$RUNNER" ] || RUNNER="$HOME/.local/lib/nodehub-agent/agent-runner.sh"
+APPLY_HOOK=/usr/local/lib/nodehub-agent/agent-apply.sh
+[ -x "$APPLY_HOOK" ] || APPLY_HOOK="$HOME/.local/lib/nodehub-agent/agent-apply.sh"
+echo "runner=$RUNNER ($( [ -x "$RUNNER" ] && echo ok || echo missing ))"
+echo "apply_hook=$APPLY_HOOK ($( [ -x "$APPLY_HOOK" ] && echo ok || echo missing ))"
+CUR_LINK="$(readlink "$STATE_DIR/current" 2>/dev/null || echo -)"
+echo "current_link=$CUR_LINK"
+ls -la "$STATE_DIR/releases" "$STATE_DIR/current" 2>/dev/null || true
+echo "--- reconcile 关键日志 ---"
+grep -Ei 'E_[A-Z_]+|apply failed|ERROR_CODE|ERROR_MESSAGE|validate|hash|download|json|config|timeout|unauthorized' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 16 || tail -n 80 "$STATE_DIR/reconcile.log" 2>/dev/null || true
+for LF in "$STATE_DIR/protocol-sing-box.log" "$STATE_DIR/protocol-xray.log"; do
+  [ -f "$LF" ] || continue
+  echo "--- $(basename "$LF") 关键日志 ---"
+  grep -Ei 'error|fail|invalid|panic|certificate|dns|timeout' "$LF" 2>/dev/null | tail -n 12 || tail -n 40 "$LF" 2>/dev/null || true
+done
+if [ -n "$ARTIFACT_URL" ]; then
+  TMP_ART="/tmp/nodehub-artifact.$$"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 20 -H "X-Node-Token: $NODE_TOKEN" "$ARTIFACT_URL" -o "$TMP_ART" >/dev/null 2>&1 || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$TMP_ART" --header="X-Node-Token: $NODE_TOKEN" --timeout=20 "$ARTIFACT_URL" >/dev/null 2>&1 || true
+  fi
+  if [ -s "$TMP_ART" ]; then
+    SIZE="$(wc -c < "$TMP_ART" 2>/dev/null || echo -)"
+    echo "artifact_download=ok size=$SIZE"
+    if command -v sha256sum >/dev/null 2>&1; then
+      REAL_SHA="$(sha256sum "$TMP_ART" | awk '{print $1}')"
+      echo "artifact_sha_local=$REAL_SHA"
+      [ -n "$ARTIFACT_SHA" ] && [ "$REAL_SHA" != "$ARTIFACT_SHA" ] && echo "artifact_sha_mismatch=expected:$ARTIFACT_SHA actual:$REAL_SHA"
+    elif command -v shasum >/dev/null 2>&1; then
+      REAL_SHA="$(shasum -a 256 "$TMP_ART" | awk '{print $1}')"
+      echo "artifact_sha_local=$REAL_SHA"
+      [ -n "$ARTIFACT_SHA" ] && [ "$REAL_SHA" != "$ARTIFACT_SHA" ] && echo "artifact_sha_mismatch=expected:$ARTIFACT_SHA actual:$REAL_SHA"
+    fi
+  else
+    echo "artifact_download=failed"
+  fi
+  rm -f "$TMP_ART" 2>/dev/null || true
+fi
+if [ -f "$STATE_DIR/current/sing-box.json" ] && command -v sing-box >/dev/null 2>&1; then
+  echo "--- sing-box check ---"
+  sing-box check -c "$STATE_DIR/current/sing-box.json" 2>&1 | tail -n 30 || true
+fi
+if [ -f "$STATE_DIR/current/xray.json" ] && command -v xray >/dev/null 2>&1; then
+  echo "--- xray check ---"
+  xray run -test -config "$STATE_DIR/current/xray.json" 2>&1 | tail -n 30 || true
+fi`,
   })
 
   commands.push({
