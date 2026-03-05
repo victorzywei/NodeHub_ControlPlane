@@ -25,6 +25,7 @@ CONFIG_ROOT="/etc/nodehub-agent"
 WARP_LICENSE=""
 ARGO_TOKEN=""
 ARGO_DOMAIN=""
+ARGO_PORT=2053
 INSTALL_WARP=0
 INSTALL_ARGO=0
 
@@ -150,6 +151,7 @@ Options:
   --install-argo                   install cloudflared and start tunnel
   --argo-token <token>             Cloudflare Tunnel token (fixed tunnel)
   --argo-domain <domain>           Cloudflare Tunnel fixed domain
+  --argo-port <port>               local origin port for Argo tunnel (default: 2053)
   --heartbeat-interval <seconds>   default: 600
   --reconcile-interval <seconds>   default: 15
   --state-dir <dir>                default: /var/lib/nodehub-agent
@@ -177,6 +179,7 @@ while [[ $# -gt 0 ]]; do
     --install-argo)     INSTALL_ARGO=1; shift ;;
     --argo-token)       need_value "$1" "${2:-}"; ARGO_TOKEN="$2"; shift 2 ;;
     --argo-domain)      need_value "$1" "${2:-}"; ARGO_DOMAIN="$2"; shift 2 ;;
+    --argo-port)        need_value "$1" "${2:-}"; ARGO_PORT="$2"; shift 2 ;;
     --heartbeat-interval) need_value "$1" "${2:-}"; HEARTBEAT_INTERVAL="$2"; shift 2 ;;
     --reconcile-interval) need_value "$1" "${2:-}"; RECONCILE_INTERVAL="$2"; shift 2 ;;
     --state-dir)        need_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
@@ -191,6 +194,9 @@ done
   usage
   die "Missing required args: --api-base --node-id --node-token"
 }
+
+[[ "$ARGO_PORT" =~ ^[0-9]+$ ]] || die "Invalid --argo-port: must be an integer"
+[[ "$ARGO_PORT" -ge 1 && "$ARGO_PORT" -le 65535 ]] || die "Invalid --argo-port: must be 1..65535"
 
 # ---------- Basic deps ----------
 require_or_install curl curl ca-certificates || die "curl is required (install it and retry)."
@@ -796,8 +802,8 @@ start_argo_tunnel() {
   else
     # Temp tunnel — find the first listening port from templates
     local temp_port=0
-    # Default to a common port; the actual port will be from the protocol config
-    temp_port=2053
+    # Use configured Argo local origin port.
+    temp_port="$ARGO_PORT"
     log "Starting Argo temp tunnel on port $temp_port..."
     nohup "$cf_bin" tunnel --url "http://localhost:${temp_port}" --edge-ip-version auto --no-autoupdate --protocol http2 > "$STATE_DIR/argo.log" 2>&1 &
     echo $! > "$argo_pidfile"
@@ -830,6 +836,7 @@ TLS_DOMAIN="$TLS_DOMAIN"
 TLS_DOMAIN_ALT="$TLS_DOMAIN_ALT"
 GITHUB_MIRROR="$GITHUB_MIRROR"
 CF_API_TOKEN="$CF_API_TOKEN"
+ARGO_PORT="$ARGO_PORT"
 HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
 RECONCILE_INTERVAL="$RECONCILE_INTERVAL"
 INSTALL_MODE="$INSTALL_MODE"
@@ -2045,6 +2052,7 @@ log "Install Mode: $INSTALL_MODE"
 log "Node ID: $NODE_ID"
 log "TLS Domain: ${TLS_DOMAIN:-<none>}"
 log "TLS Domain Alt: ${TLS_DOMAIN_ALT:-<none>}"
+log "Argo Port: ${ARGO_PORT}"
 log "Heartbeat Interval: $HEARTBEAT_INTERVAL"
 log "Reconcile Interval: $RECONCILE_INTERVAL"
 log "State Directory: $STATE_DIR"

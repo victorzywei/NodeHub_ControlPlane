@@ -30,9 +30,9 @@ function toNumberArray(values) {
   })
 }
 
-function toPort(value, fallback = 0) {
+function toPort(value, fallback = 2053) {
   const num = Number(value)
-  if (!Number.isFinite(num) || num < 0 || num > 65535) return fallback
+  if (!Number.isFinite(num) || num < 1 || num > 65535) return fallback
   return Math.floor(num)
 }
 
@@ -115,6 +115,7 @@ export function normalizeNode(node) {
     install_argo: installArgo,
     argo_token: toString(node.argo_token),
     argo_domain: toString(node.argo_domain),
+    argo_port: toPort(node.argo_port, 2053),
     // Argo - agent-reported
     argo_status: toString(node.argo_status),
     argo_temp_domain: toString(node.argo_temp_domain),

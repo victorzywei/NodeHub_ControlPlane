@@ -3,7 +3,7 @@ const PROFILE_DEFAULT_PORTS = {
   'hysteria2:udp:tls': 49444,
   'shadowsocks2022:tcp:none': 49445,
   'vless:ws:tls': 2053,
-  'vmess:ws:tls': 2096,
+  'vmess:ws:tls': 2053,
   'trojan:tcp:tls': 2087,
 }
 

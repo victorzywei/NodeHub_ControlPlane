@@ -91,7 +91,7 @@ export const BUILTIN_TEMPLATES = [
     node_types: ['vps', 'edge'],
     description: 'Argo 场景 VMESS TLS WebSocket 模板',
     defaults: {
-      port: 2096,
+      port: 2053,
       path: '/argo-vmess',
       host: '',
     },

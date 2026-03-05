@@ -3,6 +3,12 @@ import { KEY, indexRemove, indexUpsert, kvDelete, kvGetJson, kvPutJson, readInde
 import { normalizeNode } from '../../_lib/node.js'
 import { ok, fail } from '../../_lib/response.js'
 
+function toPort(value, fallback = 2053) {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1 || num > 65535) return fallback
+  return Math.floor(num)
+}
+
 export async function onRequestGet({ request, env, params }) {
   const auth = requireAdmin(request, env)
   if (!auth.ok) return auth.response
@@ -41,6 +47,10 @@ export async function onRequestPatch({ request, env, params }) {
 
   if (body.install_argo !== undefined) {
     node.install_argo = body.install_argo === true
+  }
+
+  if (body.argo_port !== undefined) {
+    node.argo_port = toPort(body.argo_port, 2053)
   }
 
   if (body.tags !== undefined) {

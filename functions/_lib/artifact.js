@@ -54,6 +54,14 @@ function resolveClientTlsMode(template, node) {
   return tlsMode
 }
 
+function resolveSubscriptionPort(template, settings, node, clientTlsMode) {
+  const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings?.port, 443))))
+  if (node?.install_argo === true && clientTlsMode === 'tls' && supportsArgoTlsOffloadTransport(template)) {
+    return 443
+  }
+  return listenPort
+}
+
 function num(value, fallback) {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
@@ -980,7 +988,7 @@ function buildSubscriptionOutbounds(templates, params, node) {
   return templates.map((tpl) => {
     const settings = getEffectiveTemplateSettings(tpl, params, node)
     const clientTlsMode = resolveClientTlsMode(tpl, node)
-    const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
+    const subscriptionPort = resolveSubscriptionPort(tpl, settings, node, clientTlsMode)
     const domainFallback = resolveServerDomain(node)
     const nextSettings = { ...settings }
     if (clientTlsMode === 'tls') {
@@ -994,7 +1002,7 @@ function buildSubscriptionOutbounds(templates, params, node) {
       protocol: text(tpl.protocol),
       transport: text(tpl.transport),
       tls_mode: clientTlsMode,
-      port: listenPort,
+      port: subscriptionPort,
       settings: nextSettings,
     }
   })

@@ -3,6 +3,12 @@ import { KEY, createId, createToken, hydrateByIndex, indexUpsert, kvPutJson } fr
 import { normalizeNode } from '../../_lib/node.js'
 import { ok, fail } from '../../_lib/response.js'
 
+function toPort(value, fallback = 2053) {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1 || num > 65535) return fallback
+  return Math.floor(num)
+}
+
 export async function onRequestGet({ request, env }) {
   const auth = requireAdmin(request, env)
   if (!auth.ok) return auth.response
@@ -31,6 +37,7 @@ export async function onRequestPost({ request, env }) {
   const installCert = body.install_cert !== undefined ? body.install_cert === true : true
   const installWarp = body.install_warp === true
   const installArgo = body.install_argo === true
+  const argoPort = toPort(body.argo_port, 2053)
 
   if (!name) return fail('VALIDATION', 'name is required', 400)
   if (!['vps', 'edge'].includes(nodeType)) {
@@ -94,6 +101,7 @@ export async function onRequestPost({ request, env }) {
     install_argo: installArgo,
     argo_token: argoToken,
     argo_domain: argoDomain,
+    argo_port: argoPort,
     // Argo - agent-reported
     argo_status: '',
     argo_temp_domain: '',

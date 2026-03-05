@@ -6,6 +6,12 @@ function quoteShell(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`
 }
 
+function toPort(value, fallback = 2053) {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1 || num > 65535) return fallback
+  return Math.floor(num)
+}
+
 export async function onRequestGet({ request, env, params }) {
   const auth = requireAdmin(request, env)
   if (!auth.ok) return auth.response
@@ -29,6 +35,7 @@ export async function onRequestGet({ request, env, params }) {
   const installWarp = node.install_warp === true
   const installCert = node.install_cert !== undefined ? node.install_cert === true : true
   const installArgo = node.install_argo === true
+  const argoPort = toPort(node.argo_port, 2053)
 
   if (installCert && node.entry_cdn) {
     commandParts.push(` --tls-domain ${quoteShell(node.entry_cdn)}`)
@@ -50,6 +57,7 @@ export async function onRequestGet({ request, env, params }) {
   }
   if (installArgo) {
     commandParts.push(' --install-argo')
+    commandParts.push(` --argo-port ${quoteShell(argoPort)}`)
     if (node.argo_token) {
       commandParts.push(` --argo-token ${quoteShell(node.argo_token)}`)
     }

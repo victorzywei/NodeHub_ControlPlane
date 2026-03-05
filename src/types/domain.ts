@@ -93,6 +93,7 @@ export interface NodeRecord {
   install_argo: boolean
   argo_token: string
   argo_domain: string
+  argo_port: number
   // Argo - agent-reported (heartbeat)
   argo_status: string
   argo_temp_domain: string

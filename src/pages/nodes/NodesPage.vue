@@ -50,6 +50,7 @@ const form = reactive({
   install_argo: false,
   argo_token: '',
   argo_domain: '',
+  argo_port: '2053',
 })
 
 const publishOpen = ref(false)
@@ -107,6 +108,12 @@ function sanitizePublishTemplateIds(ids: string[], nodeType: NodeKind): string[]
   return ids.filter((id) => allowed.has(id))
 }
 
+function toPort(value: unknown, fallback = 2053): number {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1 || num > 65535) return fallback
+  return Math.floor(num)
+}
+
 function toPayload(): Partial<NodeRecord> {
   const enableCertInstall = installGroup.value === 'public_ip'
   const enableArgoInstall = installGroup.value === 'no_public_ip'
@@ -130,6 +137,7 @@ function toPayload(): Partial<NodeRecord> {
     install_argo: enableArgoInstall,
     argo_token: form.argo_token.trim(),
     argo_domain: form.argo_domain.trim(),
+    argo_port: toPort(form.argo_port, 2053),
   } as Partial<NodeRecord>
 }
 
@@ -156,6 +164,7 @@ function fillForm(node?: NodeRecord): void {
   form.install_argo = node?.install_argo || false
   form.argo_token = node?.argo_token || ''
   form.argo_domain = node?.argo_domain || ''
+  form.argo_port = String(node?.argo_port || 2053)
   installGroup.value = resolveInstallGroup(node)
 }
 
@@ -757,6 +766,7 @@ onMounted(loadNodesData)
         <div>Argo 隧道类型：{{ detailNode.install_argo ? (detailNode.argo_token ? '固定隧道' : '临时隧道') : '-' }}</div>
         <div>Argo Token：{{ detailNode.argo_token || '-' }}</div>
         <div>Argo 固定域名：{{ detailNode.argo_domain || '-' }}</div>
+        <div>Argo 端口：{{ detailNode.argo_port || 2053 }}</div>
       </template>
       <template v-else-if="detailInstallGroup(detailNode) === 'none'">
         <div class="muted">none 模式：跳过证书和 Argo 的重复安装。</div>
@@ -854,6 +864,13 @@ onMounted(loadNodesData)
           域名 (可选)
           <input v-model="form.argo_domain" class="input" placeholder="固定隧道域名" />
         </label>
+        <label>
+          Argo 端口
+          <input v-model="form.argo_port" class="input" type="number" min="1" max="65535" step="1" placeholder="2053" />
+        </label>
+        <div class="muted" style="font-size: 12px">
+          此端口是云端隧道回源到本机的端口（默认 2053）；订阅链接会自动使用 443。
+        </div>
         <div class="muted" style="font-size: 12px">
           此分组会自动启用 Argo（cloudflared）隧道安装。
         </div>
