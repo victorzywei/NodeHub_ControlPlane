@@ -27,6 +27,7 @@ const detailOpen = ref(false)
 const detailNode = ref<NodeRecord | null>(null)
 const detailInstallCommand = ref('')
 const detailUninstallCommand = ref('')
+const detailTroubleshootCommands = ref<Array<{ title: string, command: string, copyLabel: string }>>([])
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
@@ -298,6 +299,7 @@ async function openDetail(nodeId: string): Promise<void> {
   detailOpen.value = true
   detailInstallCommand.value = ''
   detailUninstallCommand.value = ''
+  detailTroubleshootCommands.value = []
   try {
     const node = await getNode(nodeId)
     detailNode.value = node
@@ -307,10 +309,85 @@ async function openDetail(nodeId: string): Promise<void> {
 
       const baseUrl = window.location.origin
       detailUninstallCommand.value = `URL='${baseUrl}/agent/uninstall'; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s -- --remove-binaries --remove-certs --force`
+      detailTroubleshootCommands.value = buildVpsTroubleshootCommands(node, baseUrl)
     }
   } catch {
     toastStore.push('节点详情加载失败', 'danger')
   }
+}
+
+function quoteShell(value: string): string {
+  return `'${String(value || '').replace(/'/g, `'\"'\"'`)}'`
+}
+
+function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<{ title: string, command: string, copyLabel: string }> {
+  const commands: Array<{ title: string, command: string, copyLabel: string }> = []
+  const apiBase = quoteShell(baseUrl)
+  const nodeId = quoteShell(node.id)
+  const nodeToken = quoteShell(node.token || '')
+  const entryCdn = quoteShell(node.entry_cdn || '')
+  const entryDirect = quoteShell(node.entry_direct || '')
+  const entryIp = quoteShell(node.entry_ip || '')
+
+  commands.push({
+    title: 'Agent 服务状态',
+    copyLabel: '服务状态命令',
+    command: "if command -v systemctl >/dev/null 2>&1; then systemctl status nodehub-heartbeat.service nodehub-reconcile.service --no-pager || true; systemctl --user status nodehub-heartbeat.service nodehub-reconcile.service --no-pager || true; fi; ps -ef | grep -E 'agent-runner.sh|nodehub-heartbeat|nodehub-reconcile' | grep -v grep || true",
+  })
+
+  commands.push({
+    title: 'Agent 最近日志',
+    copyLabel: '日志命令',
+    command: "if command -v journalctl >/dev/null 2>&1; then journalctl -u nodehub-heartbeat.service -u nodehub-reconcile.service -n 120 --no-pager || true; journalctl --user -u nodehub-heartbeat.service -u nodehub-reconcile.service -n 120 --no-pager || true; fi; tail -n 120 /var/lib/nodehub-agent/heartbeat.log /var/lib/nodehub-agent/reconcile.log \"$HOME/.local/share/nodehub-agent/heartbeat.log\" \"$HOME/.local/share/nodehub-agent/reconcile.log\" 2>/dev/null || true",
+  })
+
+  commands.push({
+    title: '手动心跳联通测试',
+    copyLabel: '心跳测试命令',
+    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; curl -fsS -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/heartbeat?node_id=$NODE_ID"`,
+  })
+
+  commands.push({
+    title: '版本拉取检查（目标版本 vs 当前版本）',
+    copyLabel: '版本拉取检查命令',
+    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; CUR="$(cat /var/lib/nodehub-agent/current-version 2>/dev/null || cat "$HOME/.local/share/nodehub-agent/current-version" 2>/dev/null || echo 0)"; echo "panel_target=${Number(node.target_version || 0)} panel_current=${Number(node.current_version || 0)} local_current=$CUR"; curl -fsS -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$CUR"; ls -la /var/lib/nodehub-agent/releases \"$HOME/.local/share/nodehub-agent/releases\" 2>/dev/null || true`,
+  })
+
+  commands.push({
+    title: '单次执行 Reconcile',
+    copyLabel: 'Reconcile 命令',
+    command: "for RUNNER in /usr/local/lib/nodehub-agent/agent-runner.sh \"$HOME/.local/lib/nodehub-agent/agent-runner.sh\"; do if [ -x \"$RUNNER\" ]; then bash \"$RUNNER\" reconcile; exit $?; fi; done; echo 'agent-runner.sh not found' >&2; exit 1",
+  })
+
+  commands.push({
+    title: '版本应用检查（强制执行并看错误码）',
+    copyLabel: '版本应用检查命令',
+    command: "STATE_DIR=/var/lib/nodehub-agent; [ -d \"$STATE_DIR\" ] || STATE_DIR=\"$HOME/.local/share/nodehub-agent\"; for RUNNER in /usr/local/lib/nodehub-agent/agent-runner.sh \"$HOME/.local/lib/nodehub-agent/agent-runner.sh\"; do if [ -x \"$RUNNER\" ]; then bash \"$RUNNER\" reconcile || true; break; fi; done; echo '---- reconcile.log ----'; tail -n 160 \"$STATE_DIR/reconcile.log\" 2>/dev/null || true; echo '---- release pointers ----'; CUR=\"$(cat \"$STATE_DIR/current-version\" 2>/dev/null || echo '-')\"; echo \"current-version=$CUR\"; ls -la \"$STATE_DIR/current\" \"$STATE_DIR/releases\" 2>/dev/null || true; for f in \"$STATE_DIR/protocol-sing-box.rev\" \"$STATE_DIR/protocol-xray.rev\"; do [ -f \"$f\" ] && echo \"$(basename \"$f\")=$(cat \"$f\")\"; done",
+  })
+
+  commands.push({
+    title: '入口域名与回源连通性',
+    copyLabel: '入口连通命令',
+    command: `ENTRY_CDN=${entryCdn}; ENTRY_DIRECT=${entryDirect}; ENTRY_IP=${entryIp}; for host in "$ENTRY_CDN" "$ENTRY_DIRECT"; do [ -n "$host" ] || continue; echo "== $host =="; (getent ahosts "$host" 2>/dev/null || nslookup "$host" 2>/dev/null || host "$host" 2>/dev/null || true) | head -n 6; done; if [ -n "$ENTRY_CDN" ] && [ -n "$ENTRY_IP" ]; then curl -kI --connect-timeout 8 --resolve "$ENTRY_CDN:443:$ENTRY_IP" "https://$ENTRY_CDN" || true; fi`,
+  })
+
+  if (node.install_warp) {
+    commands.push({
+      title: 'WARP 状态排查',
+      copyLabel: 'WARP 排查命令',
+      command: "for C in warp-go ip; do command -v \"$C\" >/dev/null 2>&1 && \"$C\" --version 2>/dev/null | head -n 1 || true; done; pgrep -fa 'warp-go|wireguard|wg' || true; ip -6 addr show 2>/dev/null | sed -n '1,80p'",
+    })
+  }
+
+  if (node.install_argo) {
+    commands.push({
+      title: 'Argo 隧道排查',
+      copyLabel: 'Argo 排查命令',
+      command: "command -v cloudflared >/dev/null 2>&1 && cloudflared --version || true; pgrep -fa cloudflared || true; [ -f /var/lib/nodehub-agent/cloudflared.pid ] && cat /var/lib/nodehub-agent/cloudflared.pid || true; [ -f \"$HOME/.local/share/nodehub-agent/cloudflared.pid\" ] && cat \"$HOME/.local/share/nodehub-agent/cloudflared.pid\" || true",
+    })
+  }
+
+  return commands
 }
 
 function formatWarpReserved(value: number[] | null | undefined): string {
@@ -626,6 +703,14 @@ onMounted(loadNodesData)
         <div class="muted" style="margin-top: 8px; font-size: 12px">
           此命令会完全卸载 Agent 并删除所有相关文件（包括 xray/sing-box 和证书）
         </div>
+      </template>
+      <template v-if="detailTroubleshootCommands.length > 0">
+        <div class="muted" style="margin-top: 16px; font-weight: 600">Agent 故障排查命令</div>
+        <template v-for="item in detailTroubleshootCommands" :key="item.title">
+          <div class="muted" style="margin-top: 10px; font-size: 12px">{{ item.title }}</div>
+          <textarea class="textarea" readonly :value="item.command" style="min-height: 72px" />
+          <button class="btn btn-secondary" @click="copyValue(item.command, item.copyLabel)">复制{{ item.title }}</button>
+        </template>
       </template>
     </template>
     <div v-else class="muted">加载中...</div>
