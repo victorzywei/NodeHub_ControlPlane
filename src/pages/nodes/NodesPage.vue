@@ -386,6 +386,20 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   })
 
   commands.push({
+    title: '运行状态一键检查',
+    copyLabel: '运行状态一键检查',
+    command: buildCommandGroup([
+      `echo "agent_watchdog: $([ -n \"$(pgrep -f 'agent-watchdog')\" ] && echo running || echo stopped)"`,
+      `echo "agent_heartbeat: $([ -n \"$(pgrep -f 'agent-runner.sh heartbeat')\" ] && echo running || echo stopped)"`,
+      `echo "agent_reconcile: $([ -n \"$(pgrep -f 'agent-runner.sh reconcile')\" ] && echo running || echo stopped)"`,
+      `echo "xray: $([ -n \"$(pgrep -f 'xray')\" ] && echo running || echo stopped)"`,
+      `echo "sing_box: $([ -n \"$(pgrep -f 'sing-box')\" ] && echo running || echo stopped)"`,
+      `echo "warp: $([ -n \"$(pgrep -f 'warp-go|wireguard|wg')\" ] && echo running || echo stopped)"`,
+      `echo "argo: $([ -n \"$(pgrep -f 'cloudflared')\" ] && echo running || echo stopped)"`,
+    ]),
+  })
+
+  commands.push({
     title: 'Agent 重启命令',
     copyLabel: 'Agent 重启命令',
     command: buildCommandGroup([
