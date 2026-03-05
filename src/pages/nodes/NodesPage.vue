@@ -330,39 +330,15 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   const entryIp = quoteShell(node.entry_ip || '')
 
   commands.push({
-    title: 'Agent 服务状态',
-    copyLabel: '服务状态命令',
-    command: "if command -v systemctl >/dev/null 2>&1; then systemctl status nodehub-heartbeat.service nodehub-reconcile.service --no-pager || true; systemctl --user status nodehub-heartbeat.service nodehub-reconcile.service --no-pager || true; fi; ps -ef | grep -E 'agent-runner.sh|nodehub-heartbeat|nodehub-reconcile' | grep -v grep || true",
+    title: '管理端连接检查（异常自动带错误日志）',
+    copyLabel: '管理端连接检查命令',
+    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; STATE_DIR=/var/lib/nodehub-agent; [ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"; RESP="$(curl -sS --max-time 12 -w '\\nHTTP_STATUS:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/heartbeat?node_id=$NODE_ID" 2>&1)"; RC=$?; if [ "$RC" -ne 0 ]; then echo "FAIL: 管理端连接异常"; echo "reason=$(printf '%s' "$RESP" | tail -n 1)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true; exit 1; fi; HTTP="$(printf '%s\\n' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"; BODY="$(printf '%s\\n' "$RESP" | sed '/^HTTP_STATUS:/d')"; if [ "$HTTP" = "200" ] && printf '%s' "$BODY" | grep -q '"success":true'; then echo "OK: 管理端连接正常"; else echo "FAIL: 管理端连接异常 (http=$HTTP)"; echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-260)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 40 "$STATE_DIR/heartbeat.log" "$STATE_DIR/reconcile.log" 2>/dev/null || true; fi`,
   })
 
   commands.push({
-    title: 'Agent 最近日志',
-    copyLabel: '日志命令',
-    command: "if command -v journalctl >/dev/null 2>&1; then journalctl -u nodehub-heartbeat.service -u nodehub-reconcile.service -n 120 --no-pager || true; journalctl --user -u nodehub-heartbeat.service -u nodehub-reconcile.service -n 120 --no-pager || true; fi; tail -n 120 /var/lib/nodehub-agent/heartbeat.log /var/lib/nodehub-agent/reconcile.log \"$HOME/.local/share/nodehub-agent/heartbeat.log\" \"$HOME/.local/share/nodehub-agent/reconcile.log\" 2>/dev/null || true",
-  })
-
-  commands.push({
-    title: '手动心跳联通测试',
-    copyLabel: '心跳测试命令',
-    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; curl -fsS -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/heartbeat?node_id=$NODE_ID"`,
-  })
-
-  commands.push({
-    title: '版本拉取检查（目标版本 vs 当前版本）',
-    copyLabel: '版本拉取检查命令',
-    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; CUR="$(cat /var/lib/nodehub-agent/current-version 2>/dev/null || cat "$HOME/.local/share/nodehub-agent/current-version" 2>/dev/null || echo 0)"; echo "panel_target=${Number(node.target_version || 0)} panel_current=${Number(node.current_version || 0)} local_current=$CUR"; curl -fsS -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$CUR"; ls -la /var/lib/nodehub-agent/releases \"$HOME/.local/share/nodehub-agent/releases\" 2>/dev/null || true`,
-  })
-
-  commands.push({
-    title: '单次执行 Reconcile',
-    copyLabel: 'Reconcile 命令',
-    command: "for RUNNER in /usr/local/lib/nodehub-agent/agent-runner.sh \"$HOME/.local/lib/nodehub-agent/agent-runner.sh\"; do if [ -x \"$RUNNER\" ]; then bash \"$RUNNER\" reconcile; exit $?; fi; done; echo 'agent-runner.sh not found' >&2; exit 1",
-  })
-
-  commands.push({
-    title: '版本应用检查（强制执行并看错误码）',
-    copyLabel: '版本应用检查命令',
-    command: "STATE_DIR=/var/lib/nodehub-agent; [ -d \"$STATE_DIR\" ] || STATE_DIR=\"$HOME/.local/share/nodehub-agent\"; for RUNNER in /usr/local/lib/nodehub-agent/agent-runner.sh \"$HOME/.local/lib/nodehub-agent/agent-runner.sh\"; do if [ -x \"$RUNNER\" ]; then bash \"$RUNNER\" reconcile || true; break; fi; done; echo '---- reconcile.log ----'; tail -n 160 \"$STATE_DIR/reconcile.log\" 2>/dev/null || true; echo '---- release pointers ----'; CUR=\"$(cat \"$STATE_DIR/current-version\" 2>/dev/null || echo '-')\"; echo \"current-version=$CUR\"; ls -la \"$STATE_DIR/current\" \"$STATE_DIR/releases\" 2>/dev/null || true; for f in \"$STATE_DIR/protocol-sing-box.rev\" \"$STATE_DIR/protocol-xray.rev\"; do [ -f \"$f\" ] && echo \"$(basename \"$f\")=$(cat \"$f\")\"; done",
+    title: '拉取与应用检查（异常自动给出原因）',
+    copyLabel: '拉取应用检查命令',
+    command: `API_BASE=${apiBase}; NODE_ID=${nodeId}; NODE_TOKEN=${nodeToken}; STATE_DIR=/var/lib/nodehub-agent; [ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehub-agent"; LOCAL_CUR="$(cat "$STATE_DIR/current-version" 2>/dev/null || echo 0)"; RESP="$(curl -sS --max-time 12 -w '\\nHTTP_STATUS:%{http_code}' -H "X-Node-Token: $NODE_TOKEN" "$API_BASE/agent/reconcile?node_id=$NODE_ID&current_version=$LOCAL_CUR" 2>&1)"; RC=$?; if [ "$RC" -ne 0 ]; then echo "PULL: FAIL (reconcile 请求失败)"; echo "reason=$(printf '%s' "$RESP" | tail -n 1)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 60 "$STATE_DIR/reconcile.log" 2>/dev/null || true; exit 1; fi; HTTP="$(printf '%s\\n' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"; BODY="$(printf '%s\\n' "$RESP" | sed '/^HTTP_STATUS:/d')"; TARGET="$(printf '%s' "$BODY" | tr -d '\\n' | sed -n 's/.*"target_version":\\([0-9][0-9]*\\).*/\\1/p')"; NEEDS="$(printf '%s' "$BODY" | tr -d '\\n' | sed -n 's/.*"needs_update":\\(true\\|false\\).*/\\1/p')"; if [ "$HTTP" != "200" ] || ! printf '%s' "$BODY" | grep -q '"success":true'; then echo "PULL: FAIL (http=$HTTP)"; echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-260)"; echo "last_error=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; tail -n 60 "$STATE_DIR/reconcile.log" 2>/dev/null || true; exit 1; fi; if [ -z "$TARGET" ]; then echo "PULL: FAIL (返回缺少 target_version)"; echo "body=$(printf '%s' "$BODY" | tr -d '\\n' | cut -c 1-260)"; exit 1; fi; if [ "$NEEDS" = "true" ]; then echo "PULL: OK (已拉到新版本信息 target=$TARGET local=$LOCAL_CUR)"; else echo "PULL: OK (已是最新 target=$TARGET local=$LOCAL_CUR)"; fi; if [ "$LOCAL_CUR" -ge "$TARGET" ]; then echo "APPLY: OK (current=$LOCAL_CUR target=$TARGET)"; else echo "APPLY: FAIL (current=$LOCAL_CUR < target=$TARGET)"; echo "reason=$(cat "$STATE_DIR/last-error.log" 2>/dev/null || echo -)"; LOG_REASON="$(grep -E 'apply failed|E_[A-Z_]+' "$STATE_DIR/reconcile.log" 2>/dev/null | tail -n 1 || true)"; [ -n "$LOG_REASON" ] && echo "reconcile_log=$LOG_REASON"; fi`,
   })
 
   commands.push({
