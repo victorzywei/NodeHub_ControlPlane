@@ -277,12 +277,16 @@ mkdir -p "$SINGBOX_ETC" "$SINGBOX_LIB" "$SINGBOX_LOG" 2>/dev/null || true
 
 # ---------- Install Xray ----------
 install_xray() {
-  [[ -n "$XRAY_ARCH" ]] || { warn "Skip Xray install (unsupported arch)."; return 0; }
+  if [[ -z "$XRAY_ARCH" ]]; then
+    warn "Skip Xray install (unsupported arch: ${ARCH})."
+    need_cmd xray || [[ -x "$XRAY_BIN" ]]
+    return $?
+  fi
   if need_cmd xray || [[ -x "$XRAY_BIN" ]]; then
     log "Xray already installed."
     return 0
   fi
-  require_or_install unzip unzip || die "unzip is required to install Xray."
+  require_or_install unzip unzip || { warn "unzip is required to install Xray."; return 1; }
 
   cleanup_dir="$(mktempdir)"
   local zip="${cleanup_dir}/xray.zip"
@@ -290,10 +294,10 @@ install_xray() {
   url="$(wrap_url "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${XRAY_ARCH}.zip")"
 
   log "Downloading Xray: $url"
-  curl -fsSL -o "$zip" "$url" || die "Failed to download Xray from: $url"
+  curl -fsSL -o "$zip" "$url" || { warn "Failed to download Xray from: $url"; return 1; }
 
-  unzip -q -o "$zip" -d "$cleanup_dir" || die "Failed to unzip Xray package."
-  [[ -f "${cleanup_dir}/xray" ]] || die "Xray binary not found after extraction."
+  unzip -q -o "$zip" -d "$cleanup_dir" || { warn "Failed to unzip Xray package."; return 1; }
+  [[ -f "${cleanup_dir}/xray" ]] || { warn "Xray binary not found after extraction."; return 1; }
 
   mkdir -p "$(dirname "$XRAY_BIN")" || true
   mv "${cleanup_dir}/xray" "$XRAY_BIN"
@@ -344,12 +348,16 @@ get_latest_github_tag() {
 }
 
 install_singbox() {
-  [[ -n "$SINGBOX_ARCH" ]] || { warn "Skip sing-box install (unsupported arch)."; return 0; }
+  if [[ -z "$SINGBOX_ARCH" ]]; then
+    warn "Skip sing-box install (unsupported arch: ${ARCH})."
+    need_cmd sing-box || [[ -x "$SINGBOX_BIN" ]]
+    return $?
+  fi
   if need_cmd sing-box || [[ -x "$SINGBOX_BIN" ]]; then
     log "sing-box already installed."
     return 0
   fi
-  require_or_install tar tar || die "tar is required to install sing-box."
+  require_or_install tar tar || { warn "tar is required to install sing-box."; return 1; }
 
   local tag
   # Use fallback version v1.13.0 if API fails
@@ -366,11 +374,11 @@ install_singbox() {
   local tgz="${cleanup_dir}/sing-box.tar.gz"
 
   log "Downloading sing-box ${tag}: $url"
-  curl -fsSL -o "$tgz" "$url" || die "Failed to download sing-box from: $url"
+  curl -fsSL -o "$tgz" "$url" || { warn "Failed to download sing-box from: $url"; return 1; }
 
-  tar -xzf "$tgz" -C "$cleanup_dir" || die "Failed to extract sing-box tarball."
+  tar -xzf "$tgz" -C "$cleanup_dir" || { warn "Failed to extract sing-box tarball."; return 1; }
   local extracted="${cleanup_dir}/sing-box-${ver}-linux-${SINGBOX_ARCH}/sing-box"
-  [[ -f "$extracted" ]] || die "sing-box binary not found after extraction."
+  [[ -f "$extracted" ]] || { warn "sing-box binary not found after extraction."; return 1; }
 
   mkdir -p "$(dirname "$SINGBOX_BIN")" || true
   mv "$extracted" "$SINGBOX_BIN"
@@ -379,9 +387,15 @@ install_singbox() {
   log "sing-box installed to: $SINGBOX_BIN"
 }
 
-log "Installing official Xray and sing-box binaries (best-effort)..."
-install_xray || true
-install_singbox || true
+log "Installing official Xray and sing-box binaries..."
+xray_ready=0
+singbox_ready=0
+install_xray && xray_ready=1 || warn "Xray installation unavailable."
+install_singbox && singbox_ready=1 || warn "sing-box installation unavailable."
+
+if [[ "$xray_ready" -ne 1 && "$singbox_ready" -ne 1 ]]; then
+  die "Both Xray and sing-box are unavailable after installation attempts."
+fi
 
 # ---------- Install cloudflared ----------
 CLOUDFLARED_BIN=""
@@ -886,6 +900,56 @@ detect_protocol_app_version() {
   echo ""
 }
 
+engine_version() {
+  local engine="$1"
+  local cmd_timeout=""
+  local version=""
+  command -v timeout >/dev/null 2>&1 && cmd_timeout="timeout 5"
+
+  if [[ "$engine" == "sing-box" ]]; then
+    if command -v sing-box >/dev/null 2>&1; then
+      version="$($cmd_timeout sing-box version 2>/dev/null | head -n 1 | tr -d '\r\n' || true)"
+    fi
+  elif [[ "$engine" == "xray" ]]; then
+    if command -v xray >/dev/null 2>&1; then
+      version="$($cmd_timeout xray version 2>/dev/null | head -n 1 | tr -d '\r\n' || true)"
+    fi
+  fi
+  printf '%s' "$version"
+}
+
+engine_status() {
+  local engine="$1"
+  local pid_file=""
+  local pid=""
+
+  if [[ "$engine" == "sing-box" ]]; then
+    if ! command -v sing-box >/dev/null 2>&1; then
+      echo "not_installed"
+      return
+    fi
+    pid_file="$STATE_DIR/protocol-sing-box.pid"
+  elif [[ "$engine" == "xray" ]]; then
+    if ! command -v xray >/dev/null 2>&1; then
+      echo "not_installed"
+      return
+    fi
+    pid_file="$STATE_DIR/protocol-xray.pid"
+  else
+    echo "unknown"
+    return
+  fi
+
+  if [[ -f "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "running"
+      return
+    fi
+  fi
+  echo "stopped"
+}
+
 cpu_usage_percent() {
   [[ -r /proc/stat ]] || { echo "null"; return; }
   local user1 nice1 system1 idle1 iowait1 irq1 softirq1 steal1
@@ -920,20 +984,48 @@ memory_stats() {
   echo "$used_mb $total_mb $usage_percent"
 }
 
+disk_stats() {
+  local used_kb total_kb used_gb total_gb usage_percent
+  if ! command -v df >/dev/null 2>&1; then
+    echo "null null null"
+    return
+  fi
+  read -r _ total_kb used_kb _ <<< "$(df -kP / 2>/dev/null | awk 'NR==2 {print $1, $2, $3, $4}')" || true
+  [[ -n "${total_kb:-}" && -n "${used_kb:-}" ]] || { echo "null null null"; return; }
+  [[ "$total_kb" =~ ^[0-9]+$ && "$used_kb" =~ ^[0-9]+$ && "$total_kb" -gt 0 ]] || { echo "null null null"; return; }
+
+  used_gb="$(awk "BEGIN { printf \"%.2f\", $used_kb / 1024 / 1024 }")"
+  total_gb="$(awk "BEGIN { printf \"%.2f\", $total_kb / 1024 / 1024 }")"
+  usage_percent="$(awk "BEGIN { printf \"%.2f\", ($used_kb * 100) / $total_kb }")"
+  echo "$used_gb $total_gb $usage_percent"
+}
+
 build_heartbeat_payload() {
   local current_version deploy_info protocol_version error_message cpu_usage
   local memory_used memory_total memory_usage
+  local disk_used disk_total disk_usage
+  local sing_box_version sing_box_status xray_version xray_status
   current_version="$(read_current_version)"
   deploy_info="applied_rev=r${current_version}"
-  protocol_version="$(detect_protocol_app_version)"
+  sing_box_version="$(engine_version "sing-box")"
+  xray_version="$(engine_version "xray")"
+  protocol_version="${sing_box_version:-$xray_version}"
   error_message="$(read_last_error)"
   cpu_usage="$(cpu_usage_percent)"
   read -r memory_used memory_total memory_usage <<< "$(memory_stats)"
+  read -r disk_used disk_total disk_usage <<< "$(disk_stats)"
+  sing_box_status="$(engine_status "sing-box")"
+  xray_status="$(engine_status "xray")"
 
   local deploy_json protocol_json error_json warp_json argo_json argo_domain_json
+  local sing_box_version_json sing_box_status_json xray_version_json xray_status_json
   deploy_json="$(json_escape "$deploy_info")"
   protocol_json="$(json_escape "$protocol_version")"
   error_json="$(json_escape "$error_message")"
+  sing_box_version_json="$(json_escape "$sing_box_version")"
+  sing_box_status_json="$(json_escape "$sing_box_status")"
+  xray_version_json="$(json_escape "$xray_version")"
+  xray_status_json="$(json_escape "$xray_status")"
 
   # WARP registration data + status
   local warp_status="off" warp_pvk="" warp_v6="" warp_reserved="" warp_endpoint=""
@@ -977,7 +1069,7 @@ build_heartbeat_payload() {
   argo_json="$(json_escape "$argo_status")"
   argo_domain_json="$(json_escape "$argo_temp_domain")"
 
-  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"warp_private_key\":\"$warp_pvk_json\",\"warp_v6\":\"$warp_v6_json\",\"warp_reserved\":$warp_reserved_arr,\"warp_endpoint\":\"$warp_endpoint_json\",\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
+  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"disk_used_gb\":$disk_used,\"disk_total_gb\":$disk_total,\"disk_usage_percent\":$disk_usage,\"sing_box_version\":\"$sing_box_version_json\",\"sing_box_status\":\"$sing_box_status_json\",\"xray_version\":\"$xray_version_json\",\"xray_status\":\"$xray_status_json\",\"warp_private_key\":\"$warp_pvk_json\",\"warp_v6\":\"$warp_v6_json\",\"warp_reserved\":$warp_reserved_arr,\"warp_endpoint\":\"$warp_endpoint_json\",\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
 }
 
 heartbeat_once() {

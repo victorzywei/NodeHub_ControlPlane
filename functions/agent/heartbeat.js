@@ -34,7 +34,14 @@ async function applyHeartbeat(node, report, kv) {
     node.memory_used_mb = toMetric(report.memory_used_mb, { min: 0 })
     node.memory_total_mb = toMetric(report.memory_total_mb, { min: 0 })
     node.memory_usage_percent = toMetric(report.memory_usage_percent, { min: 0, max: 100 })
+    node.disk_used_gb = toMetric(report.disk_used_gb, { min: 0 })
+    node.disk_total_gb = toMetric(report.disk_total_gb, { min: 0 })
+    node.disk_usage_percent = toMetric(report.disk_usage_percent, { min: 0, max: 100 })
     node.heartbeat_reported_at = now
+    node.sing_box_version = toText(report.sing_box_version, 256)
+    node.sing_box_status = toText(report.sing_box_status, 128)
+    node.xray_version = toText(report.xray_version, 256)
+    node.xray_status = toText(report.xray_status, 128)
 
     // WARP registration data + status
     if (report.warp_private_key !== undefined) node.warp_private_key = toText(report.warp_private_key, 256)
@@ -95,6 +102,13 @@ export async function onRequestPost({ request, env }) {
     memory_used_mb: body.memory_used_mb,
     memory_total_mb: body.memory_total_mb,
     memory_usage_percent: body.memory_usage_percent,
+    disk_used_gb: body.disk_used_gb,
+    disk_total_gb: body.disk_total_gb,
+    disk_usage_percent: body.disk_usage_percent,
+    sing_box_version: body.sing_box_version,
+    sing_box_status: body.sing_box_status,
+    xray_version: body.xray_version,
+    xray_status: body.xray_status,
     warp_private_key: body.warp_private_key,
     warp_v6: body.warp_v6,
     warp_reserved: body.warp_reserved,

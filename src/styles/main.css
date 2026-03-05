@@ -262,6 +262,38 @@ textarea {
   background: color-mix(in srgb, var(--danger) 12%, #fff);
 }
 
+.metric-row {
+  display: grid;
+  gap: 6px;
+}
+
+.metric-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 16%, #fff);
+  overflow: hidden;
+}
+
+.metric-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  transition: width 160ms ease;
+}
+
+.metric-fill.cpu {
+  background: linear-gradient(90deg, #16a34a, #f59e0b, #dc2626);
+}
+
+.metric-fill.memory {
+  background: linear-gradient(90deg, #0e7e6f, #0ea5e9);
+}
+
+.metric-fill.disk {
+  background: linear-gradient(90deg, #2563eb, #7c3aed);
+}
+
 .toolbar {
   display: flex;
   gap: 10px;

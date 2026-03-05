@@ -54,7 +54,14 @@ export interface NodeRecord {
   memory_used_mb: number | null
   memory_total_mb: number | null
   memory_usage_percent: number | null
+  disk_used_gb: number | null
+  disk_total_gb: number | null
+  disk_usage_percent: number | null
   heartbeat_reported_at: string | null
+  sing_box_version: string
+  sing_box_status: string
+  xray_version: string
+  xray_status: string
   applied_template_ids: string[]
   target_artifact: {
     id: string

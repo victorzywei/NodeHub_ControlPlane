@@ -359,6 +359,41 @@ function formatMemorySummary(node: NodeRecord): string {
   return `${node.memory_used_mb.toFixed(0)} / ${node.memory_total_mb.toFixed(0)} MB (${node.memory_usage_percent.toFixed(1)}%)`
 }
 
+function formatDiskSummary(node: NodeRecord): string {
+  if (node.disk_used_gb === null || node.disk_total_gb === null || node.disk_usage_percent === null) {
+    return '-'
+  }
+  return `${node.disk_used_gb.toFixed(1)} / ${node.disk_total_gb.toFixed(1)} GB (${node.disk_usage_percent.toFixed(1)}%)`
+}
+
+function toSafePercent(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 100) return 100
+  return value
+}
+
+function metricBarStyle(value: number | null): Record<string, string> {
+  return { width: `${toSafePercent(value).toFixed(1)}%` }
+}
+
+function engineStatusClass(status: string): 'success' | 'warning' | 'danger' {
+  if (status === 'running') return 'success'
+  if (status === 'stopped') return 'warning'
+  return 'danger'
+}
+
+function engineStatusText(status: string): string {
+  if (status === 'running') return 'running'
+  if (status === 'stopped') return 'stoping'
+  return '未安装'
+}
+
+function engineVersionText(version: string, status: string): string {
+  if (status === 'not_installed') return '---'
+  return version || '---'
+}
+
 function appliedTemplatesText(node: NodeRecord): string {
   if (!Array.isArray(node.applied_template_ids) || node.applied_template_ids.length === 0) return '-'
   const names = node.applied_template_ids
@@ -482,6 +517,42 @@ onMounted(loadNodesData)
     <template v-if="detailNode">
       <div><strong>{{ detailNode.name }}</strong></div>
       <div class="muted">{{ detailNode.id }}</div>
+      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">心跳上报</div>
+      <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
+      <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
+      <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
+      <div>
+        sing-box：{{ engineVersionText(detailNode.sing_box_version, detailNode.sing_box_status) }}
+        <span class="badge" :class="engineStatusClass(detailNode.sing_box_status)">
+          {{ engineStatusText(detailNode.sing_box_status) }}
+        </span>
+      </div>
+      <div>
+        xray：{{ engineVersionText(detailNode.xray_version, detailNode.xray_status) }}
+        <span class="badge" :class="engineStatusClass(detailNode.xray_status)">
+          {{ engineStatusText(detailNode.xray_status) }}
+        </span>
+      </div>
+      <div class="metric-row">
+        <div>CPU 使用率：{{ formatPercent(detailNode.cpu_usage_percent) }}</div>
+        <div class="metric-bar">
+          <div class="metric-fill cpu" :style="metricBarStyle(detailNode.cpu_usage_percent)" />
+        </div>
+      </div>
+      <div class="metric-row">
+        <div>内存占用：{{ formatMemorySummary(detailNode) }}</div>
+        <div class="metric-bar">
+          <div class="metric-fill memory" :style="metricBarStyle(detailNode.memory_usage_percent)" />
+        </div>
+      </div>
+      <div class="metric-row">
+        <div>存储占用：{{ formatDiskSummary(detailNode) }}</div>
+        <div class="metric-bar">
+          <div class="metric-fill disk" :style="metricBarStyle(detailNode.disk_usage_percent)" />
+        </div>
+      </div>
+
+      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">节点配置</div>
       <div>类型：{{ detailNode.node_type }}</div>
       <div>证书安装：{{ detailNode.install_cert ? '已启用' : '已关闭' }}</div>
       <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
@@ -496,12 +567,6 @@ onMounted(loadNodesData)
       <div>应用回执：{{ detailNode.last_release_message || '-' }}</div>
       <div>失败代码：{{ detailNode.last_release_error_code || '-' }}</div>
       <div>节点 Token：{{ detailNode.token || '-' }}</div>
-      <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
-      <div>协议应用版本：{{ detailNode.protocol_app_version || '-' }}</div>
-      <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
-      <div>CPU 使用率：{{ formatPercent(detailNode.cpu_usage_percent) }}</div>
-      <div>内存占用：{{ formatMemorySummary(detailNode) }}</div>
-      <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
       <div>GitHub 镜像：{{ detailNode.github_mirror || '-' }}</div>
       <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
 
