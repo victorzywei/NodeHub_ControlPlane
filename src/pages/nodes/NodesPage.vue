@@ -349,6 +349,7 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   const commands: Array<{ title: string, command: string, copyLabel: string }> = []
   const installMode = resolveAgentInstallMode(node)
   const stateDir = installMode === 'user' ? '"$HOME/.local/share/nodehub-agent"' : '/var/lib/nodehub-agent'
+  const configRoot = installMode === 'user' ? '"$HOME/.config/nodehub-agent"' : '/etc/nodehub-agent'
   const systemctlCmd = installMode === 'user' ? 'systemctl --user' : 'systemctl'
   const journalctlCmd = installMode === 'user' ? 'journalctl --user' : 'journalctl'
   const heartbeatUrl = quoteShell(`${baseUrl}/agent/heartbeat?node_id=${encodeURIComponent(node.id)}`)
@@ -374,6 +375,7 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
     command: buildCommandGroup([
       `${systemctlCmd} status nodehub-heartbeat.service nodehub-reconcile.service --no-pager -l`,
       `${journalctlCmd} -u nodehub-reconcile.service -n 200 --no-pager`,
+      `cat ${configRoot}/config.env`,
     ]),
   })
 
@@ -428,6 +430,11 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
         'warp-go --version',
         "pgrep -fa 'warp-go|wireguard|wg'",
         'ip -6 addr show',
+        `cat ${stateDir}/warp-status`,
+        `cat ${stateDir}/warp/private_key`,
+        `cat ${stateDir}/warp/v6`,
+        `cat ${stateDir}/warp/reserved`,
+        `cat ${stateDir}/warp/endpoint`,
       ]),
     })
   }
@@ -440,6 +447,10 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
         'cloudflared --version',
         'pgrep -fa cloudflared',
         `cat ${stateDir}/cloudflared.pid`,
+        `ps -fp "$(cat ${stateDir}/cloudflared.pid)"`,
+        `cat ${stateDir}/argo-domain`,
+        `tail -n 120 ${stateDir}/argo.log`,
+        `grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' ${stateDir}/argo.log | tail -n 1`,
       ]),
     })
   }

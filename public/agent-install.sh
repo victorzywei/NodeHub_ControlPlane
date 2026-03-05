@@ -825,6 +825,7 @@ fi
 # ---------- Write config + runner ----------
 CONFIG_FILE="${CONFIG_ROOT}/config.env"
 RUNNER_SCRIPT="${AGENT_ROOT}/agent-runner.sh"
+WATCHDOG_SCRIPT="${AGENT_ROOT}/agent-watchdog.sh"
 HOOK_DIR="${AGENT_ROOT}/hooks"
 APPLY_HOOK="${HOOK_DIR}/apply.sh"
 
@@ -1767,12 +1768,118 @@ echo "ERROR_MESSAGE="
 exit 0
 EOF
 
+# Watchdog: no-systemd/no-cron fallback daemon (self-heal heartbeat/reconcile)
+cat > "$WATCHDOG_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+RUNNER_SCRIPT="__NODEHUB_RUNNER_SCRIPT__"
+STATE_DIR="__NODEHUB_STATE_DIR__"
+PID_FILE="$STATE_DIR/watchdog.pid"
+LOG_FILE="$STATE_DIR/watchdog.log"
+CHECK_INTERVAL=15
+
+mkdir -p "$STATE_DIR"
+
+is_alive() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+  [[ -f "$PID_FILE" ]] && cat "$PID_FILE" 2>/dev/null || true
+}
+
+run_forever() {
+  trap 'rm -f "$PID_FILE"; exit 0' INT TERM
+  echo $$ > "$PID_FILE"
+  while true; do
+    bash "$RUNNER_SCRIPT" cron_check >/dev/null 2>&1 || true
+    sleep "$CHECK_INTERVAL"
+  done
+}
+
+start_daemon() {
+  local pid=""
+  pid="$(read_pid)"
+  if is_alive "$pid"; then
+    echo "watchdog already running pid=$pid"
+    return 0
+  fi
+
+  rm -f "$PID_FILE"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash "$0" run >> "$LOG_FILE" 2>&1 < /dev/null &
+  else
+    nohup bash "$0" run >> "$LOG_FILE" 2>&1 &
+  fi
+
+  sleep 1
+  pid="$(read_pid)"
+  if is_alive "$pid"; then
+    echo "watchdog started pid=$pid"
+    return 0
+  fi
+
+  echo "watchdog failed to start" >&2
+  return 1
+}
+
+stop_daemon() {
+  local pid=""
+  pid="$(read_pid)"
+  if is_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    if is_alive "$pid"; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$PID_FILE"
+}
+
+status_daemon() {
+  local pid=""
+  pid="$(read_pid)"
+  if is_alive "$pid"; then
+    echo "running pid=$pid"
+  else
+    echo "stopped"
+  fi
+}
+
+MODE="${1:-start}"
+case "$MODE" in
+  run)
+    run_forever
+    ;;
+  start)
+    start_daemon
+    ;;
+  stop)
+    stop_daemon
+    ;;
+  status)
+    status_daemon
+    ;;
+  *)
+    echo "Usage: $0 {run|start|stop|status}" >&2
+    exit 1
+    ;;
+esac
+EOF
+
 # Replace placeholder config path
 CONFIG_FILE_ESCAPED="$(printf '%s' "$CONFIG_FILE" | sed 's/[\/&]/\\&/g')"
+RUNNER_SCRIPT_ESCAPED="$(printf '%s' "$RUNNER_SCRIPT" | sed 's/[\/&]/\\&/g')"
+STATE_DIR_ESCAPED="$(printf '%s' "$STATE_DIR" | sed 's/[\/&]/\\&/g')"
 sedi "s/__NODEHUB_CONFIG_FILE__/${CONFIG_FILE_ESCAPED}/g" "$RUNNER_SCRIPT"
 sedi "s/__NODEHUB_CONFIG_FILE__/${CONFIG_FILE_ESCAPED}/g" "$APPLY_HOOK"
+sedi "s/__NODEHUB_RUNNER_SCRIPT__/${RUNNER_SCRIPT_ESCAPED}/g" "$WATCHDOG_SCRIPT"
+sedi "s/__NODEHUB_STATE_DIR__/${STATE_DIR_ESCAPED}/g" "$WATCHDOG_SCRIPT"
 chmod 700 "$RUNNER_SCRIPT" || true
 chmod 700 "$APPLY_HOOK" || true
+chmod 700 "$WATCHDOG_SCRIPT" || true
 
 # ---------- systemd service files ----------
 if [[ "$INSTALL_MODE" == "user" ]]; then
@@ -1871,7 +1978,48 @@ if [[ "$USE_SYSTEMD" -eq 1 ]]; then
   log "Check status:"
   log "  systemctl $SYSTEMCTL_USER_FLAG status nodehub-heartbeat.service nodehub-reconcile.service --no-pager"
 else
-  warn "systemd not available; using cron-based watchdog fallback."
+  warn "systemd not available; using watchdog daemon fallback."
+
+  ensure_watchdog_bootstrap() {
+    local startup_line=""
+    startup_line="bash \"$WATCHDOG_SCRIPT\" start >/dev/null 2>&1"
+
+    if [[ "$INSTALL_MODE" == "system" ]] && is_root; then
+      local rc_local="/etc/rc.local"
+      if [[ -f "$rc_local" ]]; then
+        if ! grep -F "$WATCHDOG_SCRIPT" "$rc_local" >/dev/null 2>&1; then
+          awk -v line="$startup_line" '
+            BEGIN { inserted=0 }
+            /^exit 0$/ && inserted==0 { print line; inserted=1 }
+            { print }
+            END { if (inserted==0) print line }
+          ' "$rc_local" > "${rc_local}.tmp" && mv "${rc_local}.tmp" "$rc_local"
+        fi
+      else
+        cat > "$rc_local" <<EOF
+#!/usr/bin/env bash
+$startup_line
+exit 0
+EOF
+      fi
+      chmod 755 "$rc_local" 2>/dev/null || true
+      log "Registered watchdog startup hook: $rc_local"
+      return 0
+    fi
+
+    local profile_file="${HOME}/.profile"
+    if [[ ! -f "$profile_file" ]]; then
+      touch "$profile_file" 2>/dev/null || true
+    fi
+    if [[ -f "$profile_file" ]] && ! grep -F "$WATCHDOG_SCRIPT" "$profile_file" >/dev/null 2>&1; then
+      printf '\n%s\n' "$startup_line" >> "$profile_file"
+      log "Registered watchdog startup hook: $profile_file"
+      return 0
+    fi
+    return 1
+  }
+
+  CRON_READY=0
 
   # Ensure cron exists or try install
   if ! need_cmd crontab; then
@@ -1881,26 +2029,36 @@ else
     fi
   fi
 
-  if is_root && [[ -d /etc/cron.d ]]; then
-    # safer for root: /etc/cron.d
+  if is_root && [[ -d /etc/cron.d ]] && (need_cmd cron || need_cmd crond || need_cmd crontab); then
     local_cron="/etc/cron.d/nodehub-agent"
     cat > "$local_cron" <<EOF
-* * * * * root bash "$RUNNER_SCRIPT" cron_check >/dev/null 2>&1
+* * * * * root bash "$WATCHDOG_SCRIPT" start >/dev/null 2>&1
 EOF
     chmod 644 "$local_cron" || true
-    log "Installed cron watchdog: $local_cron"
+    log "Installed cron watchdog launcher: $local_cron"
+    CRON_READY=1
   elif need_cmd crontab; then
-    # user cron
-    (crontab -l 2>/dev/null | grep -v 'agent-runner.sh cron_check' || true; \
-      echo "* * * * * bash \"$RUNNER_SCRIPT\" cron_check >/dev/null 2>&1") | crontab -
-    log "Installed cron watchdog via crontab."
-  else
-    warn "Cron not available. Agent will start now but won't auto-restart on reboot."
+    (crontab -l 2>/dev/null | grep -v 'agent-watchdog.sh start' || true; \
+      echo "* * * * * bash \"$WATCHDOG_SCRIPT\" start >/dev/null 2>&1") | crontab -
+    log "Installed user crontab watchdog launcher."
+    CRON_READY=1
   fi
 
-  # start watchdog now
-  bash "$RUNNER_SCRIPT" cron_check || true
-  log "Watchdog started. Logs:"
+  # start watchdog daemon now
+  if bash "$WATCHDOG_SCRIPT" start >/dev/null 2>&1; then
+    log "Watchdog daemon started."
+  else
+    warn "Watchdog daemon failed to start; running one-time cron_check fallback."
+    bash "$RUNNER_SCRIPT" cron_check || true
+  fi
+
+  if [[ "$CRON_READY" -ne 1 ]]; then
+    warn "Cron not available. Registering startup hook fallback."
+    ensure_watchdog_bootstrap || warn "Startup hook registration failed; watchdog will not auto-start after reboot."
+  fi
+
+  log "Agent runtime logs:"
+  log "  $STATE_DIR/watchdog.log"
   log "  $STATE_DIR/heartbeat.log"
   log "  $STATE_DIR/reconcile.log"
 fi
