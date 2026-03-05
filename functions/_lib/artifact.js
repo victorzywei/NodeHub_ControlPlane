@@ -2,6 +2,36 @@
   return String(value ?? '').trim()
 }
 
+function toHost(value) {
+  const raw = text(value)
+  if (!raw) return ''
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      return new URL(raw).hostname || ''
+    } catch {
+      return ''
+    }
+  }
+
+  return raw.replace(/\/.*$/, '').trim()
+}
+
+function firstHost(candidates) {
+  for (const candidate of candidates || []) {
+    const host = toHost(candidate)
+    if (host) return host
+  }
+  return ''
+}
+
+function resolveServerDomain(node) {
+  const argoHost = firstHost([node?.argo_domain, node?.argo_temp_domain])
+  const publicHost = firstHost([node?.entry_cdn, node?.entry_direct])
+  if (node?.install_argo === true) return argoHost || publicHost || ''
+  return publicHost || argoHost || ''
+}
+
 function num(value, fallback) {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
@@ -155,7 +185,7 @@ function normalizeTemplateSettings(template, sourceSettings, node) {
   const protocol = text(template?.protocol).toLowerCase()
   const transport = text(template?.transport).toLowerCase()
   const tlsMode = text(template?.tls_mode).toLowerCase()
-  const fallbackDomain = node ? text(node.entry_cdn || node.entry_direct) : ''
+  const fallbackDomain = node ? resolveServerDomain(node) : ''
   const templateId = text(template?.id || template?.name || 'tpl')
   const nodeId = node ? text(node.id) : ''
   const nodeToken = node ? text(node.token) : ''
