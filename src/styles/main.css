@@ -262,36 +262,66 @@ textarea {
   background: color-mix(in srgb, var(--danger) 12%, #fff);
 }
 
-.metric-row {
+.metric-ring-grid {
   display: grid;
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
 }
 
-.metric-bar {
-  width: 100%;
-  height: 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-muted) 16%, #fff);
-  overflow: hidden;
+.metric-ring-card {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: #fff;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
 }
 
-.metric-fill {
-  height: 100%;
-  width: 0;
-  border-radius: 999px;
-  transition: width 160ms ease;
+.metric-ring {
+  --metric-progress: 0%;
+  --metric-color: var(--brand);
+  position: relative;
+  width: 98px;
+  height: 98px;
+  border-radius: 50%;
+  background: conic-gradient(var(--metric-color) var(--metric-progress), #e7e7e7 0);
+  display: grid;
+  place-items: center;
 }
 
-.metric-fill.cpu {
-  background: linear-gradient(90deg, #16a34a, #f59e0b, #dc2626);
+.metric-ring::before {
+  content: '';
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  background: #fff;
 }
 
-.metric-fill.memory {
-  background: linear-gradient(90deg, #0e7e6f, #0ea5e9);
+.metric-ring span {
+  position: absolute;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
-.metric-fill.disk {
-  background: linear-gradient(90deg, #2563eb, #7c3aed);
+.metric-ring.cpu {
+  --metric-color: #0e7e6f;
+}
+
+.metric-ring.memory {
+  --metric-color: #2563eb;
+}
+
+.metric-ring.disk {
+  --metric-color: #7c3aed;
+}
+
+.metric-ring-title {
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .toolbar {

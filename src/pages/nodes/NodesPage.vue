@@ -27,8 +27,6 @@ const detailOpen = ref(false)
 const detailNode = ref<NodeRecord | null>(null)
 const detailInstallCommand = ref('')
 const detailUninstallCommand = ref('')
-const detailWarpKeyVisible = ref(false)
-const detailArgoTokenVisible = ref(false)
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
@@ -300,8 +298,6 @@ async function openDetail(nodeId: string): Promise<void> {
   detailOpen.value = true
   detailInstallCommand.value = ''
   detailUninstallCommand.value = ''
-  detailWarpKeyVisible.value = false
-  detailArgoTokenVisible.value = false
   try {
     const node = await getNode(nodeId)
     detailNode.value = node
@@ -321,13 +317,6 @@ function formatWarpReserved(value: number[] | null | undefined): string {
   if (!Array.isArray(value) || value.length === 0) return '-'
   const nums = value.map((item) => Number(item)).filter((item) => Number.isFinite(item))
   return nums.length > 0 ? nums.join(',') : '-'
-}
-
-function maskSecret(value: string): string {
-  const text = String(value || '')
-  if (!text) return '-'
-  if (text.length <= 8) return '*'.repeat(text.length)
-  return `${text.slice(0, 6)}...${text.slice(-4)}`
 }
 
 async function runBatchDelete(): Promise<void> {
@@ -373,8 +362,24 @@ function toSafePercent(value: number | null): number {
   return value
 }
 
-function metricBarStyle(value: number | null): Record<string, string> {
-  return { width: `${toSafePercent(value).toFixed(1)}%` }
+function metricRingStyle(value: number | null): Record<string, string> {
+  return { '--metric-progress': `${toSafePercent(value).toFixed(1)}%` }
+}
+
+function metricPercentText(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '--'
+  return `${value.toFixed(2)}%`
+}
+
+function detailInstallGroup(node: NodeRecord): InstallGroup {
+  return resolveInstallGroup(node)
+}
+
+function installGroupLabel(node: NodeRecord): string {
+  const mode = detailInstallGroup(node)
+  if (mode === 'public_ip') return '有公网 IP'
+  if (mode === 'no_public_ip') return '无公网 IP'
+  return 'none（不重复安装）'
 }
 
 function engineStatusClass(status: string): 'success' | 'warning' | 'danger' {
@@ -518,6 +523,26 @@ onMounted(loadNodesData)
       <div><strong>{{ detailNode.name }}</strong></div>
       <div class="muted">{{ detailNode.id }}</div>
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">心跳上报</div>
+      <div class="metric-ring-grid">
+        <div class="metric-ring-card">
+          <div class="metric-ring cpu" :style="metricRingStyle(detailNode.cpu_usage_percent)">
+            <span>{{ metricPercentText(detailNode.cpu_usage_percent) }}</span>
+          </div>
+          <div class="metric-ring-title">CPU 使用率</div>
+        </div>
+        <div class="metric-ring-card">
+          <div class="metric-ring memory" :style="metricRingStyle(detailNode.memory_usage_percent)">
+            <span>{{ metricPercentText(detailNode.memory_usage_percent) }}</span>
+          </div>
+          <div class="metric-ring-title">内存：{{ detailNode.memory_used_mb?.toFixed(2) || '--' }} MB / {{ detailNode.memory_total_mb?.toFixed(2) || '--' }} MB</div>
+        </div>
+        <div class="metric-ring-card">
+          <div class="metric-ring disk" :style="metricRingStyle(detailNode.disk_usage_percent)">
+            <span>{{ metricPercentText(detailNode.disk_usage_percent) }}</span>
+          </div>
+          <div class="metric-ring-title">存储：{{ detailNode.disk_used_gb?.toFixed(2) || '--' }} GB / {{ detailNode.disk_total_gb?.toFixed(2) || '--' }} GB</div>
+        </div>
+      </div>
       <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
       <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
       <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
@@ -533,30 +558,16 @@ onMounted(loadNodesData)
           {{ engineStatusText(detailNode.xray_status) }}
         </span>
       </div>
-      <div class="metric-row">
-        <div>CPU 使用率：{{ formatPercent(detailNode.cpu_usage_percent) }}</div>
-        <div class="metric-bar">
-          <div class="metric-fill cpu" :style="metricBarStyle(detailNode.cpu_usage_percent)" />
-        </div>
-      </div>
-      <div class="metric-row">
-        <div>内存占用：{{ formatMemorySummary(detailNode) }}</div>
-        <div class="metric-bar">
-          <div class="metric-fill memory" :style="metricBarStyle(detailNode.memory_usage_percent)" />
-        </div>
-      </div>
-      <div class="metric-row">
-        <div>存储占用：{{ formatDiskSummary(detailNode) }}</div>
-        <div class="metric-bar">
-          <div class="metric-fill disk" :style="metricBarStyle(detailNode.disk_usage_percent)" />
-        </div>
-      </div>
+      <div>CPU：{{ formatPercent(detailNode.cpu_usage_percent) }}</div>
+      <div>内存：{{ formatMemorySummary(detailNode) }}</div>
+      <div>存储：{{ formatDiskSummary(detailNode) }}</div>
       <div>
         WARP 状态：
         <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
       </div>
       <div>WARP IPv6：{{ detailNode.warp_v6 || '-' }}</div>
       <div>WARP Endpoint：{{ detailNode.warp_endpoint || '-' }}</div>
+      <div>WARP Reserved：{{ formatWarpReserved(detailNode.warp_reserved) }}</div>
       <div>
         Argo 状态：
         <span class="badge" :class="detailNode.argo_status === 'running' ? 'success' : (detailNode.argo_status ? 'warning' : 'danger')">
@@ -575,62 +586,28 @@ onMounted(loadNodesData)
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">节点配置</div>
       <div>类型：{{ detailNode.node_type }}</div>
-      <div>证书安装：{{ detailNode.install_cert ? '已启用' : '已关闭' }}</div>
-      <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
-      <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
-      <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
+      <div>安装分组模式：{{ installGroupLabel(detailNode) }}</div>
       <div>协议应用：{{ appliedTemplatesText(detailNode) }}</div>
       <div>发布版本：{{ releaseVersionText(detailNode) }}</div>
-      <div>节点 Token：{{ detailNode.token || '-' }}</div>
       <div>GitHub 镜像：{{ detailNode.github_mirror || '-' }}</div>
-      <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
-
-      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">WARP 出口</div>
+      <template v-if="detailInstallGroup(detailNode) === 'public_ip'">
+        <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
+        <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
+        <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
+        <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
+      </template>
+      <template v-else-if="detailInstallGroup(detailNode) === 'none'">
+        <div class="muted">none 模式：跳过证书和 Argo 的重复安装。</div>
+      </template>
+      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">WARP 出口配置</div>
       <div>安装：{{ detailNode.install_warp ? '已启用' : '未启用' }}</div>
       <div>License：{{ detailNode.warp_license ? '已配置' : '未配置' }}</div>
-      <div>注册状态：
-        <span class="badge" :class="detailNode.warp_status ? 'success' : 'warning'">{{ detailNode.warp_status || '未注册' }}</span>
-      </div>
-      <div>
-        密钥：
-        <template v-if="detailNode.warp_private_key">
-          <code>{{ detailWarpKeyVisible ? detailNode.warp_private_key : maskSecret(detailNode.warp_private_key) }}</code>
-          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="detailWarpKeyVisible = !detailWarpKeyVisible">
-            {{ detailWarpKeyVisible ? '隐藏' : '显示' }}
-          </button>
-          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="copyValue(detailNode.warp_private_key, 'WARP 私钥')">
-            复制
-          </button>
-        </template>
-        <span v-else>-</span>
-      </div>
-      <div>IPv6：{{ detailNode.warp_v6 || '-' }}</div>
-      <div>Endpoint：{{ detailNode.warp_endpoint || '-' }}</div>
-      <div>Reserved：{{ formatWarpReserved(detailNode.warp_reserved) }}</div>
 
-      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">Argo 隧道</div>
-      <div>配置：
-        <span class="badge" :class="detailNode.install_argo ? 'success' : 'warning'">
-          {{ detailNode.install_argo ? (detailNode.argo_token ? '固定隧道' : '临时隧道') : '未启用' }}
-        </span>
-      </div>
-      <div>
-        Token：
-        <template v-if="detailNode.argo_token">
-          <code>{{ detailArgoTokenVisible ? detailNode.argo_token : maskSecret(detailNode.argo_token) }}</code>
-          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="detailArgoTokenVisible = !detailArgoTokenVisible">
-            {{ detailArgoTokenVisible ? '隐藏' : '显示' }}
-          </button>
-          <button class="btn btn-secondary" style="margin-left: 6px; padding: 2px 8px" @click="copyValue(detailNode.argo_token, 'Argo Token')">
-            复制
-          </button>
-        </template>
-        <span v-else>-</span>
-      </div>
+      <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">Argo 隧道配置</div>
+      <div>安装：{{ detailInstallGroup(detailNode) === 'no_public_ip' ? '已启用' : '未启用' }}</div>
+      <div>隧道类型：{{ detailNode.install_argo ? (detailNode.argo_token ? '固定隧道' : '临时隧道') : '-' }}</div>
+      <div>Token：{{ detailNode.argo_token ? '已配置' : '未配置' }}</div>
       <div>固定域名：{{ detailNode.argo_domain || '-' }}</div>
-      <div>临时域名：{{ detailNode.argo_temp_domain || '-' }}</div>
-      <div>运行状态：{{ detailNode.argo_status || '-' }}</div>
-      <button class="btn btn-secondary" style="margin-top: 8px" @click="copyValue(detailNode.token, '节点 Token')">复制 Token</button>
       <template v-if="detailInstallCommand">
         <div class="muted" style="margin-top: 16px; font-weight: 600">VPS 安装命令</div>
         <textarea class="textarea" readonly :value="detailInstallCommand" style="min-height: 80px" />
