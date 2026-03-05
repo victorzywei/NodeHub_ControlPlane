@@ -353,6 +353,7 @@ function buildCommandGroup(lines: string[]): string {
 function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<{ title: string, command: string, copyLabel: string }> {
   const commands: Array<{ title: string, command: string, copyLabel: string }> = []
   const installMode = resolveAgentInstallMode(node)
+  const argoPort = toPort(node.argo_port, 2053)
   const stateDir = installMode === 'user' ? '"$HOME/.local/share/nodehub-agent"' : '/var/lib/nodehub-agent'
   const configRoot = installMode === 'user' ? '"$HOME/.config/nodehub-agent"' : '/etc/nodehub-agent'
   const systemctlCmd = installMode === 'user' ? 'systemctl --user' : 'systemctl'
@@ -381,6 +382,15 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
       `${systemctlCmd} status nodehub-heartbeat.service nodehub-reconcile.service --no-pager -l`,
       `${journalctlCmd} -u nodehub-reconcile.service -n 200 --no-pager`,
       `cat ${configRoot}/config.env`,
+    ]),
+  })
+
+  commands.push({
+    title: 'Agent 重启命令',
+    copyLabel: 'Agent 重启命令',
+    command: buildCommandGroup([
+      `${systemctlCmd} restart nodehub-heartbeat.service nodehub-reconcile.service`,
+      `${systemctlCmd} status nodehub-heartbeat.service nodehub-reconcile.service --no-pager -l`,
     ]),
   })
 
@@ -445,6 +455,36 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   }
 
   if (node.install_argo) {
+    if (node.argo_token) {
+      const tokenQuoted = quoteShell(node.argo_token)
+      const domainWrite = node.argo_domain ? `echo ${quoteShell(node.argo_domain)} > ${stateDir}/argo-domain` : ''
+      commands.push({
+        title: 'Argo 重启命令',
+        copyLabel: 'Argo 重启命令',
+        command: buildCommandGroup([
+          'pkill -f cloudflared || true',
+          `nohup cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token ${tokenQuoted} > ${stateDir}/argo.log 2>&1 &`,
+          `echo $! > ${stateDir}/cloudflared.pid`,
+          domainWrite,
+          'sleep 2',
+          'pgrep -fa cloudflared',
+        ]),
+      })
+    } else {
+      commands.push({
+        title: 'Argo 重启命令',
+        copyLabel: 'Argo 重启命令',
+        command: buildCommandGroup([
+          'pkill -f cloudflared || true',
+          `nohup cloudflared tunnel --url "http://localhost:${argoPort}" --edge-ip-version auto --no-autoupdate --protocol http2 > ${stateDir}/argo.log 2>&1 &`,
+          `echo $! > ${stateDir}/cloudflared.pid`,
+          'sleep 2',
+          'pgrep -fa cloudflared',
+          `grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' ${stateDir}/argo.log | tail -n 1`,
+        ]),
+      })
+    }
+
     commands.push({
       title: 'Argo 排查命令集合',
       copyLabel: 'Argo 排查命令集合',
