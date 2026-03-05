@@ -102,6 +102,8 @@ export async function onRequestGet({ request, env, params }) {
       const t = artifact.subscription_outbounds[index]
       const s = t.settings || {}
       const addr = resolveSubscriptionAddress(node)
+      const outboundPort = Number(t.port ?? s.port)
+      if (!Number.isFinite(outboundPort) || outboundPort < 1 || outboundPort > 65535) continue
 
       outbounds.push({
         name: toNodeOutboundName(node, t, index, templateNames),
@@ -109,7 +111,7 @@ export async function onRequestGet({ request, env, params }) {
         protocol: t.protocol,
         transport: t.transport,
         tls_mode: t.tls_mode,
-        port: Number(t.port || s.port || 443),
+        port: Math.floor(outboundPort),
         address: addr,
         settings: s,
       })

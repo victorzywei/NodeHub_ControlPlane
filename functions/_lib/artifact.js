@@ -32,6 +32,28 @@ function resolveServerDomain(node) {
   return publicHost || argoHost || ''
 }
 
+function supportsArgoTlsOffloadTransport(template) {
+  const transport = text(template?.transport).toLowerCase()
+  return transport === 'ws' || transport === 'httpupgrade' || transport === 'xhttp' || transport === 'grpc'
+}
+
+function shouldUseArgoTlsOffload(template, node) {
+  const tlsMode = text(template?.tls_mode).toLowerCase()
+  return node?.install_argo === true && tlsMode === 'tls' && supportsArgoTlsOffloadTransport(template)
+}
+
+function resolveInboundTlsMode(template, node) {
+  if (shouldUseArgoTlsOffload(template, node)) return 'none'
+  return text(template?.tls_mode).toLowerCase() || 'none'
+}
+
+function resolveClientTlsMode(template, node) {
+  const tlsMode = text(template?.tls_mode).toLowerCase() || 'none'
+  if (tlsMode === 'reality') return 'reality'
+  if (node?.install_argo === true && supportsArgoTlsOffloadTransport(template)) return 'tls'
+  return tlsMode
+}
+
 function num(value, fallback) {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
@@ -266,8 +288,8 @@ function getEffectiveTemplateSettings(template, params, node) {
   return normalizeTemplateSettings(template, buildTemplateSettings(template, params), node)
 }
 
-function applyTlsForSingbox(template, settings) {
-  const tlsMode = text(template.tls_mode).toLowerCase()
+function applyTlsForSingbox(template, settings, node) {
+  const tlsMode = resolveInboundTlsMode(template, node)
   if (!tlsMode || tlsMode === 'none') return undefined
 
   if (tlsMode === 'reality') {
@@ -337,8 +359,8 @@ function applyTransportForSingbox(template, settings) {
   throw new Error(`unsupported transport for sing-box: ${transport}`)
 }
 
-function buildSingboxInbound(template, params, idx) {
-  const settings = getEffectiveTemplateSettings(template, params)
+function buildSingboxInbound(template, params, idx, node) {
+  const settings = getEffectiveTemplateSettings(template, params, node)
   const protocol = text(template.protocol).toLowerCase()
   const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
   if (!listenPort) throw new Error(`invalid port for template: ${template.name}`)
@@ -350,7 +372,7 @@ function buildSingboxInbound(template, params, idx) {
       listen: '::',
       listen_port: listenPort,
       users: [toUser(template, settings)],
-      tls: applyTlsForSingbox(template, settings),
+      tls: applyTlsForSingbox(template, settings, node),
       transport: applyTransportForSingbox(template, settings),
     }
   }
@@ -362,7 +384,7 @@ function buildSingboxInbound(template, params, idx) {
       listen: '::',
       listen_port: listenPort,
       users: [toUser(template, settings)],
-      tls: applyTlsForSingbox(template, settings),
+      tls: applyTlsForSingbox(template, settings, node),
       transport: applyTransportForSingbox(template, settings),
     }
   }
@@ -375,7 +397,7 @@ function buildSingboxInbound(template, params, idx) {
       listen: '::',
       listen_port: listenPort,
       users: [{ uuid: user.uuid }],
-      tls: applyTlsForSingbox(template, settings),
+      tls: applyTlsForSingbox(template, settings, node),
       transport: applyTransportForSingbox(template, settings),
     }
   }
@@ -387,7 +409,7 @@ function buildSingboxInbound(template, params, idx) {
       listen: '::',
       listen_port: listenPort,
       users: [toUser(template, settings)],
-      tls: applyTlsForSingbox(template, settings) || {
+      tls: applyTlsForSingbox(template, settings, node) || {
         enabled: true,
         certificate_path: '__NODEHUB_CERT_CRT__',
         key_path: '__NODEHUB_CERT_KEY__',
@@ -598,7 +620,7 @@ function resolveWarpRoute(templates, node) {
 }
 
 function buildSingboxConfig(templates, params, node) {
-  const inbounds = templates.map((tpl, idx) => buildSingboxInbound(tpl, params, idx))
+  const inbounds = templates.map((tpl, idx) => buildSingboxInbound(tpl, params, idx, node))
   const outbounds = [{ type: 'direct', tag: 'direct' }]
   const endpoints = []
   const route = { final: 'direct' }
@@ -653,9 +675,9 @@ function buildSingboxConfig(templates, params, node) {
   }
 }
 
-function buildXrayStreamSettings(template, settings) {
+function buildXrayStreamSettings(template, settings, node) {
   const protocol = text(template.protocol).toLowerCase()
-  const tlsMode = text(template.tls_mode).toLowerCase()
+  const tlsMode = resolveInboundTlsMode(template, node)
   let transport = protocol === 'hysteria2' ? 'hysteria' : (text(template.transport).toLowerCase() || 'tcp')
 
   // Xray REALITY in recent versions requires raw/xhttp/grpc, while templates
@@ -730,11 +752,11 @@ function buildXrayStreamSettings(template, settings) {
   return stream
 }
 
-function buildXrayInbound(template, params, idx) {
-  const settings = getEffectiveTemplateSettings(template, params)
+function buildXrayInbound(template, params, idx, node) {
+  const settings = getEffectiveTemplateSettings(template, params, node)
   const protocol = text(template.protocol).toLowerCase()
   const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
-  const streamSettings = buildXrayStreamSettings(template, settings)
+  const streamSettings = buildXrayStreamSettings(template, settings, node)
 
   if (protocol === 'vless') {
     const user = toUser(template, settings)
@@ -819,7 +841,7 @@ function buildXrayInbound(template, params, idx) {
 }
 
 function buildXrayConfig(templates, params, node) {
-  const inbounds = templates.map((tpl, idx) => buildXrayInbound(tpl, params, idx))
+  const inbounds = templates.map((tpl, idx) => buildXrayInbound(tpl, params, idx, node))
   const outbounds = [
     { tag: 'direct', protocol: 'freedom' },
   ]
@@ -875,18 +897,26 @@ function buildXrayConfig(templates, params, node) {
   return { log: { loglevel: 'warning' }, inbounds, outbounds, routing }
 }
 
-function buildSubscriptionOutbounds(templates, params) {
+function buildSubscriptionOutbounds(templates, params, node) {
   return templates.map((tpl) => {
-    const settings = getEffectiveTemplateSettings(tpl, params)
+    const settings = getEffectiveTemplateSettings(tpl, params, node)
+    const clientTlsMode = resolveClientTlsMode(tpl, node)
     const listenPort = Math.max(1, Math.min(65535, Math.floor(num(settings.port, 443))))
+    const domainFallback = resolveServerDomain(node)
+    const nextSettings = { ...settings }
+    if (clientTlsMode === 'tls') {
+      if (!text(nextSettings.host)) nextSettings.host = domainFallback
+      if (!text(nextSettings.sni)) nextSettings.sni = text(nextSettings.server_name || nextSettings.host || domainFallback)
+    }
+
     return {
       template_id: text(tpl.id),
       template_name: text(tpl.name),
       protocol: text(tpl.protocol),
       transport: text(tpl.transport),
-      tls_mode: text(tpl.tls_mode),
+      tls_mode: clientTlsMode,
       port: listenPort,
-      settings: { ...settings },
+      settings: nextSettings,
     }
   })
 }
@@ -1011,7 +1041,7 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
   const actionSingBox = getGroupAction(groups, 'sing-box')
   const actionXray = getGroupAction(groups, 'xray')
   const reloadCmd = 'nodehub-protocol-restart'
-  const subscriptionOutbounds = buildSubscriptionOutbounds(allTemplates, params)
+  const subscriptionOutbounds = buildSubscriptionOutbounds(allTemplates, params, node)
   const manifest = buildManifest({
     nodeId: node.id,
     rev,
