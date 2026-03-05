@@ -62,6 +62,7 @@ export async function onRequestPost({ request, env }) {
     protocol_app_version: '',
     last_heartbeat_error: '',
     cpu_usage_percent: null,
+    cpu_cores: null,
     memory_used_mb: null,
     memory_total_mb: null,
     memory_usage_percent: null,

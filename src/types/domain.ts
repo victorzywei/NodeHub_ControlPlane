@@ -51,6 +51,7 @@ export interface NodeRecord {
   protocol_app_version: string
   last_heartbeat_error: string
   cpu_usage_percent: number | null
+  cpu_cores: number | null
   memory_used_mb: number | null
   memory_total_mb: number | null
   memory_usage_percent: number | null

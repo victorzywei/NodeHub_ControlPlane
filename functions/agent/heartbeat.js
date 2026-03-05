@@ -14,6 +14,15 @@ function toMetric(value, { min = 0, max = null } = {}) {
   return Math.round(num * 100) / 100
 }
 
+function toIntegerMetric(value, { min = 0, max = null } = {}) {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return null
+  const intNum = Math.floor(num)
+  if (intNum < min) return null
+  if (max !== null && intNum > max) return null
+  return intNum
+}
+
 async function loadAndAuthNode(kv, nodeId, token) {
   const node = await kvGetJson(kv, KEY.node(nodeId), null)
   if (!node) return { ok: false, response: fail('NOT_FOUND', 'Node not found', 404) }
@@ -31,6 +40,7 @@ async function applyHeartbeat(node, report, kv) {
     node.protocol_app_version = toText(report.protocol_app_version, 256)
     node.last_heartbeat_error = toText(report.error_message, 1024)
     node.cpu_usage_percent = toMetric(report.cpu_usage_percent, { min: 0, max: 100 })
+    node.cpu_cores = toIntegerMetric(report.cpu_cores, { min: 1, max: 1024 })
     node.memory_used_mb = toMetric(report.memory_used_mb, { min: 0 })
     node.memory_total_mb = toMetric(report.memory_total_mb, { min: 0 })
     node.memory_usage_percent = toMetric(report.memory_usage_percent, { min: 0, max: 100 })
@@ -99,6 +109,7 @@ export async function onRequestPost({ request, env }) {
     protocol_app_version: body.protocol_app_version,
     error_message: body.error_message,
     cpu_usage_percent: body.cpu_usage_percent,
+    cpu_cores: body.cpu_cores,
     memory_used_mb: body.memory_used_mb,
     memory_total_mb: body.memory_total_mb,
     memory_usage_percent: body.memory_usage_percent,

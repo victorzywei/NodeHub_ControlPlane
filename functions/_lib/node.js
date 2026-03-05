@@ -81,6 +81,7 @@ export function normalizeNode(node) {
     protocol_app_version: toString(node.protocol_app_version),
     last_heartbeat_error: toString(node.last_heartbeat_error),
     cpu_usage_percent: toNullableNumber(node.cpu_usage_percent),
+    cpu_cores: toNullableNumber(node.cpu_cores),
     memory_used_mb: toNullableNumber(node.memory_used_mb),
     memory_total_mb: toNullableNumber(node.memory_total_mb),
     memory_usage_percent: toNullableNumber(node.memory_usage_percent),

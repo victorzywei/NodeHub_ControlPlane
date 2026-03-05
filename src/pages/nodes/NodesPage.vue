@@ -341,6 +341,10 @@ function installModeLabel(node: NodeRecord): string {
   return resolveAgentInstallMode(node)
 }
 
+function buildCommandGroup(lines: string[]): string {
+  return lines.map((line) => line.trim()).filter((line) => line.length > 0).join('\n')
+}
+
 function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<{ title: string, command: string, copyLabel: string }> {
   const commands: Array<{ title: string, command: string, copyLabel: string }> = []
   const installMode = resolveAgentInstallMode(node)
@@ -356,140 +360,87 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   const entryHttpsUrl = node.entry_cdn ? quoteShell(`https://${node.entry_cdn}`) : ''
 
   commands.push({
-    title: '管理端心跳检查',
-    copyLabel: '管理端心跳检查命令',
-    command: `curl -i --max-time 12 -H ${tokenHeader} ${heartbeatUrl}`,
+    title: '管理端接口检查命令集合',
+    copyLabel: '管理端接口命令集合',
+    command: buildCommandGroup([
+      `curl -i --max-time 12 -H ${tokenHeader} ${heartbeatUrl}`,
+      `curl -i --max-time 15 -H ${tokenHeader} ${reconcileUrl}`,
+    ]),
   })
 
   commands.push({
-    title: '拉取配置检查',
-    copyLabel: '拉取配置检查命令',
-    command: `curl -i --max-time 15 -H ${tokenHeader} ${reconcileUrl}`,
+    title: '服务器状态命令集合',
+    copyLabel: '服务器状态命令集合',
+    command: buildCommandGroup([
+      `${systemctlCmd} status nodehub-heartbeat.service nodehub-reconcile.service --no-pager -l`,
+      `${journalctlCmd} -u nodehub-reconcile.service -n 200 --no-pager`,
+    ]),
   })
 
   commands.push({
-    title: '服务器状态',
-    copyLabel: '服务器状态命令',
-    command: `${systemctlCmd} status nodehub-heartbeat.service nodehub-reconcile.service --no-pager -l`,
+    title: '版本应用状态命令集合',
+    copyLabel: '版本应用状态命令集合',
+    command: buildCommandGroup([
+      `cat ${stateDir}/reconcile.log`,
+      `cat ${stateDir}/current-version`,
+      `cat ${stateDir}/last-error.log`,
+    ]),
   })
 
   commands.push({
-    title: '拉取服务日志',
-    copyLabel: '拉取服务日志命令',
-    command: `${journalctlCmd} -u nodehub-reconcile.service -n 200 --no-pager`,
+    title: 'sing-box 排查命令集合',
+    copyLabel: 'sing-box 排查命令集合',
+    command: buildCommandGroup([
+      `cat ${stateDir}/current/sing-box.json`,
+      'pgrep -fa sing-box',
+      `tail -n 200 ${stateDir}/protocol-sing-box.log`,
+    ]),
   })
 
   commands.push({
-    title: '版本应用状态',
-    copyLabel: '版本应用状态命令',
-    command: `cat ${stateDir}/reconcile.log`,
+    title: 'xray 排查命令集合',
+    copyLabel: 'xray 排查命令集合',
+    command: buildCommandGroup([
+      `cat ${stateDir}/current/xray.json`,
+      'pgrep -fa xray',
+      `tail -n 200 ${stateDir}/protocol-xray.log`,
+    ]),
   })
 
-  commands.push({
-    title: '版本号状态',
-    copyLabel: '版本号状态命令',
-    command: `cat ${stateDir}/current-version`,
-  })
-
-  commands.push({
-    title: '最近错误摘要',
-    copyLabel: '最近错误摘要命令',
-    command: `cat ${stateDir}/last-error.log`,
-  })
-
-  commands.push({
-    title: 'sing-box 配置',
-    copyLabel: 'sing-box 配置命令',
-    command: `cat ${stateDir}/current/sing-box.json`,
-  })
-
-  commands.push({
-    title: 'sing-box 运行状态',
-    copyLabel: 'sing-box 运行状态命令',
-    command: 'pgrep -fa sing-box',
-  })
-
-  commands.push({
-    title: 'sing-box 运行日志',
-    copyLabel: 'sing-box 日志命令',
-    command: `tail -n 200 ${stateDir}/protocol-sing-box.log`,
-  })
-
-  commands.push({
-    title: 'xray 配置',
-    copyLabel: 'xray 配置命令',
-    command: `cat ${stateDir}/current/xray.json`,
-  })
-
-  commands.push({
-    title: 'xray 运行状态',
-    copyLabel: 'xray 运行状态命令',
-    command: 'pgrep -fa xray',
-  })
-
-  commands.push({
-    title: 'xray 运行日志',
-    copyLabel: 'xray 日志命令',
-    command: `tail -n 200 ${stateDir}/protocol-xray.log`,
-  })
-
-  if (node.entry_cdn) {
+  const entryCommands = [
+    node.entry_cdn ? `nslookup ${entryCdn}` : '',
+    node.entry_direct ? `nslookup ${entryDirect}` : '',
+    node.entry_cdn && node.entry_ip ? `curl -kI --connect-timeout 8 --resolve ${entryResolve} ${entryHttpsUrl}` : '',
+  ].filter((item) => item.length > 0)
+  if (entryCommands.length > 0) {
     commands.push({
-      title: '入口 CDN 解析',
-      copyLabel: '入口 CDN 解析命令',
-      command: `nslookup ${entryCdn}`,
-    })
-  }
-
-  if (node.entry_direct) {
-    commands.push({
-      title: '入口 Direct 解析',
-      copyLabel: '入口 Direct 解析命令',
-      command: `nslookup ${entryDirect}`,
-    })
-  }
-
-  if (node.entry_cdn && node.entry_ip) {
-    commands.push({
-      title: '入口回源 HTTPS 检查',
-      copyLabel: '入口回源检查命令',
-      command: `curl -kI --connect-timeout 8 --resolve ${entryResolve} ${entryHttpsUrl}`,
+      title: '入口连通排查命令集合',
+      copyLabel: '入口连通排查命令集合',
+      command: buildCommandGroup(entryCommands),
     })
   }
 
   if (node.install_warp) {
     commands.push({
-      title: 'WARP 版本检查',
-      copyLabel: 'WARP 版本命令',
-      command: 'warp-go --version',
-    })
-    commands.push({
-      title: 'WARP 进程检查',
-      copyLabel: 'WARP 进程命令',
-      command: "pgrep -fa 'warp-go|wireguard|wg'",
-    })
-    commands.push({
-      title: 'WARP IPv6 地址检查',
-      copyLabel: 'WARP IPv6 命令',
-      command: 'ip -6 addr show',
+      title: 'WARP 排查命令集合',
+      copyLabel: 'WARP 排查命令集合',
+      command: buildCommandGroup([
+        'warp-go --version',
+        "pgrep -fa 'warp-go|wireguard|wg'",
+        'ip -6 addr show',
+      ]),
     })
   }
 
   if (node.install_argo) {
     commands.push({
-      title: 'Argo 版本检查',
-      copyLabel: 'Argo 版本命令',
-      command: 'cloudflared --version',
-    })
-    commands.push({
-      title: 'Argo 进程检查',
-      copyLabel: 'Argo 进程命令',
-      command: 'pgrep -fa cloudflared',
-    })
-    commands.push({
-      title: 'Argo PID 检查',
-      copyLabel: 'Argo PID 命令',
-      command: `cat ${stateDir}/cloudflared.pid`,
+      title: 'Argo 排查命令集合',
+      copyLabel: 'Argo 排查命令集合',
+      command: buildCommandGroup([
+        'cloudflared --version',
+        'pgrep -fa cloudflared',
+        `cat ${stateDir}/cloudflared.pid`,
+      ]),
     })
   }
 
@@ -552,6 +503,11 @@ function metricRingStyle(value: number | null): Record<string, string> {
 function metricPercentText(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return '--'
   return `${value.toFixed(2)}%`
+}
+
+function cpuCoreText(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value <= 0) return '-- 核'
+  return `${Math.floor(value)} 核`
 }
 
 function detailInstallGroup(node: NodeRecord): InstallGroup {
@@ -712,7 +668,7 @@ onMounted(loadNodesData)
             <div class="metric-ring-label">CPU</div>
             <div class="metric-ring-percent">{{ metricPercentText(detailNode.cpu_usage_percent) }}</div>
           </div>
-          <div class="metric-ring-title">{{ metricPercentText(detailNode.cpu_usage_percent) }}</div>
+          <div class="metric-ring-title">{{ metricPercentText(detailNode.cpu_usage_percent) }} / {{ cpuCoreText(detailNode.cpu_cores) }}</div>
         </div>
         <div class="metric-ring-card">
           <div class="metric-ring memory" :style="metricRingStyle(detailNode.memory_usage_percent)">

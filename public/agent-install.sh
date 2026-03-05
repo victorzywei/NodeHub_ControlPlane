@@ -972,6 +972,18 @@ cpu_usage_percent() {
   awk "BEGIN { printf \"%.2f\", $usage_x100 / 100 }"
 }
 
+cpu_core_count() {
+  local cores=""
+  if command -v nproc >/dev/null 2>&1; then
+    cores="$(nproc 2>/dev/null || echo "")"
+  fi
+  if [[ -z "$cores" && -r /proc/cpuinfo ]]; then
+    cores="$(awk '/^processor[[:space:]]*:/ {count++} END {if (count > 0) print count}' /proc/cpuinfo 2>/dev/null || echo "")"
+  fi
+  [[ "$cores" =~ ^[0-9]+$ && "$cores" -gt 0 ]] || { echo "null"; return; }
+  echo "$cores"
+}
+
 memory_stats() {
   [[ -r /proc/meminfo ]] || { echo "null null null"; return; }
   local total_kb available_kb used_kb used_mb total_mb usage_x100 usage_percent
@@ -1002,7 +1014,7 @@ disk_stats() {
 }
 
 build_heartbeat_payload() {
-  local current_version deploy_info protocol_version error_message cpu_usage install_mode
+  local current_version deploy_info protocol_version error_message cpu_usage cpu_cores install_mode
   local memory_used memory_total memory_usage
   local disk_used disk_total disk_usage
   local sing_box_version sing_box_status xray_version xray_status
@@ -1021,6 +1033,7 @@ build_heartbeat_payload() {
   protocol_version="${sing_box_version:-$xray_version}"
   error_message="$(read_last_error)"
   cpu_usage="$(cpu_usage_percent)"
+  cpu_cores="$(cpu_core_count)"
   read -r memory_used memory_total memory_usage <<< "$(memory_stats)"
   read -r disk_used disk_total disk_usage <<< "$(disk_stats)"
   sing_box_status="$(engine_status "sing-box")"
@@ -1078,7 +1091,7 @@ build_heartbeat_payload() {
   argo_json="$(json_escape "$argo_status")"
   argo_domain_json="$(json_escape "$argo_temp_domain")"
 
-  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"disk_used_gb\":$disk_used,\"disk_total_gb\":$disk_total,\"disk_usage_percent\":$disk_usage,\"sing_box_version\":\"$sing_box_version_json\",\"sing_box_status\":\"$sing_box_status_json\",\"xray_version\":\"$xray_version_json\",\"xray_status\":\"$xray_status_json\",\"warp_private_key\":\"$warp_pvk_json\",\"warp_v6\":\"$warp_v6_json\",\"warp_reserved\":$warp_reserved_arr,\"warp_endpoint\":\"$warp_endpoint_json\",\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
+  echo "{\"node_id\":\"$NODE_ID\",\"deploy_info\":\"$deploy_json\",\"protocol_app_version\":\"$protocol_json\",\"error_message\":\"$error_json\",\"cpu_usage_percent\":$cpu_usage,\"cpu_cores\":$cpu_cores,\"memory_used_mb\":$memory_used,\"memory_total_mb\":$memory_total,\"memory_usage_percent\":$memory_usage,\"disk_used_gb\":$disk_used,\"disk_total_gb\":$disk_total,\"disk_usage_percent\":$disk_usage,\"sing_box_version\":\"$sing_box_version_json\",\"sing_box_status\":\"$sing_box_status_json\",\"xray_version\":\"$xray_version_json\",\"xray_status\":\"$xray_status_json\",\"warp_private_key\":\"$warp_pvk_json\",\"warp_v6\":\"$warp_v6_json\",\"warp_reserved\":$warp_reserved_arr,\"warp_endpoint\":\"$warp_endpoint_json\",\"warp_status\":\"$warp_json\",\"argo_status\":\"$argo_json\",\"argo_temp_domain\":\"$argo_domain_json\"}"
 }
 
 heartbeat_once() {
