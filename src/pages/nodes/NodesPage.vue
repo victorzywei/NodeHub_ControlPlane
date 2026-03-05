@@ -549,6 +549,8 @@ onMounted(loadNodesData)
       <div>部署信息：{{ detailNode.deploy_info || '-' }}</div>
       <div>最近错误：{{ detailNode.last_heartbeat_error || '-' }}</div>
       <div>资源上报：{{ formatRelative(detailNode.heartbeat_reported_at) }}</div>
+      <div>WARP 安装：{{ detailNode.install_warp ? '已启用' : '未启用' }}</div>
+      <div>Argo 安装：{{ detailNode.install_argo ? '已启用' : '未启用' }}</div>
       <div>
         sing-box：{{ engineVersionText(detailNode.sing_box_version, detailNode.sing_box_status) }}
         <span class="badge" :class="engineStatusClass(detailNode.sing_box_status)">
@@ -585,23 +587,24 @@ onMounted(loadNodesData)
       <div>失败代码：{{ detailNode.last_release_error_code || '-' }}</div>
 
       <div style="margin-top: 12px; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px">节点配置</div>
+      <div>名称：{{ detailNode.name }}</div>
+      <div>Node Token：{{ detailNode.token || '-' }}</div>
       <div>类型：{{ detailNode.node_type }}</div>
+      <div>区域：{{ detailNode.region || '-' }}</div>
+      <div>标签：{{ (detailNode.tags && detailNode.tags.length > 0) ? detailNode.tags.join(', ') : '-' }}</div>
       <div>安装分组模式：{{ installGroupLabel(detailNode) }}</div>
-      <div>协议应用：{{ appliedTemplatesText(detailNode) }}</div>
-      <div>发布版本：{{ releaseVersionText(detailNode) }}</div>
       <div>GitHub 镜像：{{ detailNode.github_mirror || '-' }}</div>
-      <div>WARP 安装：{{ detailNode.install_warp ? '已启用' : '未启用' }}</div>
-      <div>WARP License：{{ detailNode.warp_license ? '已配置' : '未配置' }}</div>
+      <div>WARP License：{{ detailNode.warp_license || '-' }}</div>
       <template v-if="detailInstallGroup(detailNode) === 'public_ip'">
+        <div>证书安装：{{ detailNode.install_cert ? '已启用' : '未启用' }}</div>
         <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
         <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
         <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
-        <div>Cloudflare Token：{{ detailNode.cf_api_token ? '已设置' : '-' }}</div>
+        <div>Cloudflare Token：{{ detailNode.cf_api_token || '-' }}</div>
       </template>
       <template v-else-if="detailInstallGroup(detailNode) === 'no_public_ip'">
-        <div>Argo 安装：{{ detailNode.install_argo ? '已启用' : '未启用' }}</div>
         <div>Argo 隧道类型：{{ detailNode.install_argo ? (detailNode.argo_token ? '固定隧道' : '临时隧道') : '-' }}</div>
-        <div>Argo Token：{{ detailNode.argo_token ? '已配置' : '未配置' }}</div>
+        <div>Argo Token：{{ detailNode.argo_token || '-' }}</div>
         <div>Argo 固定域名：{{ detailNode.argo_domain || '-' }}</div>
       </template>
       <template v-else-if="detailInstallGroup(detailNode) === 'none'">
