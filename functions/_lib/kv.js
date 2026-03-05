@@ -2,11 +2,13 @@
   idxNodes: 'idx:nodes',
   idxTemplates: 'idx:templates',
   idxSubscriptions: 'idx:subscriptions',
+  idxNodeReleases: (nodeId) => `idx:node_releases:${nodeId}`,
   node: (id) => `node:${id}`,
   template: (id) => `template:${id}`,
   templateOverride: (id) => `template_override:${id}`,
   subscription: (token) => `subscription:${token}`,
   artifact: (id) => `artifact:${id}`,
+  release: (nodeId, rev) => `release:${nodeId}:r${Math.max(0, Math.floor(Number(rev) || 0))}`,
 }
 
 export { KEY }

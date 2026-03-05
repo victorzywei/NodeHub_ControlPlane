@@ -29,10 +29,8 @@ export async function onRequestPost({ request, env }) {
   const argoToken = String(body.argo_token || '')
   const argoDomain = String(body.argo_domain || '')
   const installCert = body.install_cert !== undefined ? body.install_cert === true : true
-  const installWarp = body.install_warp !== undefined ? body.install_warp === true : warpLicense.trim().length > 0
-  const installArgo = body.install_argo !== undefined
-    ? body.install_argo === true
-    : (argoToken.trim().length > 0 || argoDomain.trim().length > 0)
+  const installWarp = body.install_warp === true
+  const installArgo = body.install_argo === true
 
   if (!name) return fail('VALIDATION', 'name is required', 400)
   if (!['vps', 'edge'].includes(nodeType)) {
@@ -55,7 +53,9 @@ export async function onRequestPost({ request, env }) {
     cf_api_token: String(body.cf_api_token || ''),
     token: createToken(),
     applied_template_ids: [],
-    target_version: 0,
+    desired_rev: 0,
+    desired_artifact_id: '',
+    desired_sha256: '',
     current_version: 0,
     last_seen_at: null,
     deploy_info: '',
@@ -74,11 +74,11 @@ export async function onRequestPost({ request, env }) {
     sing_box_status: '',
     xray_version: '',
     xray_status: '',
-    target_artifact: null,
     current_artifact: null,
     last_release_status: 'idle',
     last_release_error_code: '',
     last_release_message: '',
+    last_release_version: 0,
 
     // WARP - user config
     install_warp: installWarp,

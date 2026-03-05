@@ -19,22 +19,25 @@ const onlineRate = computed(() => {
 })
 
 const failedAlerts = computed(() => nodes.value.filter((item) => item.last_release_status === 'failed').length)
-const pendingApply = computed(() => nodes.value.filter((item) => item.last_release_status === 'pending').length)
+const pendingApply = computed(() =>
+  nodes.value.filter((item) => item.last_release_status === 'pending' || item.last_release_status === 'applied').length,
+)
 
 function releaseVersionText(node: NodeRecord): string {
-  const rev = Number(node.target_artifact?.rev || node.target_version || 0)
+  const rev = Number(node.desired_rev || 0)
   if (!Number.isFinite(rev) || rev <= 0) return '-'
   return `r${Math.floor(rev)}`
 }
 
 function releaseStatusClass(node: NodeRecord): 'success' | 'warning' | 'danger' {
-  if (node.last_release_status === 'ok') return 'success'
+  if (node.last_release_status === 'healthy') return 'success'
   if (node.last_release_status === 'failed') return 'danger'
   return 'warning'
 }
 
 function releaseStatusText(node: NodeRecord): string {
-  if (node.last_release_status === 'ok') return '已应用'
+  if (node.last_release_status === 'healthy') return '健康'
+  if (node.last_release_status === 'applied') return '已应用待健康'
   if (node.last_release_status === 'failed') return '应用失败'
   if (node.last_release_status === 'pending') return '应用中'
   return '未发布'

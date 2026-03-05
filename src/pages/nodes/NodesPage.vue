@@ -263,7 +263,8 @@ async function publishTemplatesForNode(): Promise<void> {
     if (releaseStatusNode.value && releaseStatusNode.value.id === node.id) {
       releaseStatusNode.value = node
     }
-    toastStore.push(`协议已发布，版本 r${node.target_version}`, 'success')
+    const publishedRev = Number(node.desired_rev || 0)
+    toastStore.push(`协议已发布，版本 r${publishedRev}`, 'success')
     publishOpen.value = false
     await loadNodesData()
   } catch {
@@ -327,11 +328,6 @@ function resolveAgentInstallMode(node: NodeRecord): AgentInstallMode {
   const modeMatch = deployInfo.match(/(?:^|[;,\s])install_mode=(user|system)(?:$|[;,\s])/i)
   if (modeMatch && modeMatch[1]) {
     return modeMatch[1].toLowerCase() === 'user' ? 'user' : 'system'
-  }
-
-  const legacyMatch = deployInfo.match(/(?:^|[;,\s])mode=(user|system)(?:$|[;,\s])/i)
-  if (legacyMatch && legacyMatch[1]) {
-    return legacyMatch[1].toLowerCase() === 'user' ? 'user' : 'system'
   }
 
   return 'system'
@@ -558,10 +554,9 @@ function appliedTemplatesText(node: NodeRecord): string {
 }
 
 function releaseVersion(node: NodeRecord): number {
-  const targetRev = Number(node.target_artifact?.rev || 0)
-  if (Number.isFinite(targetRev) && targetRev > 0) return Math.floor(targetRev)
-  const version = Number(node.target_version || 0)
-  return Number.isFinite(version) && version > 0 ? Math.floor(version) : 0
+  const desiredRev = Number(node.desired_rev || 0)
+  if (Number.isFinite(desiredRev) && desiredRev > 0) return Math.floor(desiredRev)
+  return 0
 }
 
 function releaseVersionText(node: NodeRecord): string {
@@ -570,13 +565,14 @@ function releaseVersionText(node: NodeRecord): string {
 }
 
 function releaseStatusClass(node: NodeRecord): 'success' | 'warning' | 'danger' {
-  if (node.last_release_status === 'ok') return 'success'
+  if (node.last_release_status === 'healthy') return 'success'
   if (node.last_release_status === 'failed') return 'danger'
   return 'warning'
 }
 
 function releaseStatusText(node: NodeRecord): string {
-  if (node.last_release_status === 'ok') return '已应用'
+  if (node.last_release_status === 'healthy') return '健康'
+  if (node.last_release_status === 'applied') return '已应用待健康'
   if (node.last_release_status === 'failed') return '应用失败'
   if (node.last_release_status === 'pending') return '应用中'
   return '未发布'

@@ -1,6 +1,7 @@
 import { buildNodeArtifactBundle } from './artifact.js'
 import { BUILTIN_TEMPLATES } from './constants.js'
 import { KEY, createId, kvGetJson, kvPutJson } from './kv.js'
+import { putRelease } from './release.js'
 import { supportsTemplateCombination } from './template-capability.js'
 
 const NODE_TYPES = new Set(['vps', 'edge'])
@@ -148,30 +149,12 @@ export async function resolveTemplatesForPreview(kv, nodeType, templateIds) {
   }
 }
 
-function buildTargetArtifact(artifactId, artifact, nowIso) {
-  return {
-    id: artifactId,
-    rev: artifact.rev,
-    engine: artifact.engine,
-    engines: Array.isArray(artifact.engines) ? artifact.engines : [],
-    action_sing_box: String(artifact.action_sing_box || ''),
-    action_xray: String(artifact.action_xray || ''),
-    reload_cmd: artifact.reload_cmd,
-    sha256: artifact.sha256,
-    summary: artifact.summary,
-    template_names: artifact.template_names,
-    params: artifact.params || {},
-    subscription_outbounds: artifact.subscription_outbounds || [],
-    created_at: nowIso,
-  }
-}
-
 export async function queueNodeTemplateApply({ kv, node, templateIds, nowIso }) {
   const resolved = await resolveTemplatesForNode(kv, node.node_type, templateIds)
   const templateGroups = Array.isArray(resolved.groups) ? resolved.groups : []
   const currentVersion = Number(node.current_version || 0) || 0
-  const targetVersion = Number(node.target_version || 0) || 0
-  const nextVersion = Math.max(currentVersion, targetVersion, 0) + 1
+  const desiredVersion = Number(node.desired_rev || 0) || 0
+  const nextVersion = Math.max(currentVersion, desiredVersion, 0) + 1
   const operationId = createId('op')
   const artifactId = createId('artifact')
 
@@ -196,15 +179,38 @@ export async function queueNodeTemplateApply({ kv, node, templateIds, nowIso }) 
     action_xray: String(artifact.action_xray || ''),
     reload_cmd: artifact.reload_cmd,
     sha256: artifact.sha256,
-    bundle: artifact.bundle,
+    package_format: String(artifact.package_format || 'tar'),
+    package_base64: String(artifact.package_base64 || ''),
+    files: artifact.files || {},
+    manifest: artifact.manifest || null,
     created_at: nowIso,
   })
 
   node.applied_template_ids = resolved.ids
-  node.target_version = nextVersion
-  node.target_artifact = buildTargetArtifact(artifactId, artifact, nowIso)
+  node.desired_rev = nextVersion
+  node.desired_artifact_id = artifactId
+  node.desired_sha256 = String(artifact.sha256 || '')
   node.last_release_status = 'pending'
   node.last_release_error_code = ''
   node.last_release_message = resolved.templates.length > 0 ? `templates queued r${nextVersion}` : `templates cleared r${nextVersion}`
+  node.last_release_version = nextVersion
+
+  await putRelease(kv, {
+    id: `${node.id}:r${nextVersion}`,
+    node_id: node.id,
+    rev: nextVersion,
+    artifact_id: artifactId,
+    artifact_sha256: String(artifact.sha256 || ''),
+    status: 'pending',
+    summary: String(artifact.summary || ''),
+    template_names: Array.isArray(artifact.template_names) ? artifact.template_names : [],
+    error_code: '',
+    message: node.last_release_message,
+    desired_at: nowIso,
+    applied_at: '',
+    healthy_at: '',
+    failed_at: '',
+    updated_at: nowIso,
+  })
 }
 

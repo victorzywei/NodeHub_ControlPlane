@@ -88,18 +88,25 @@ export async function onRequestGet({ request, env, params }) {
 
   const outbounds = []
   for (const node of filtered) {
-    const artifact =
-      node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
-        ? node.target_artifact
-        : null
-    if (!artifact || !Array.isArray(artifact.subscription_outbounds)) continue
+    const artifactId = String(node.desired_artifact_id || '').trim()
+    const artifact = artifactId ? await kvGetJson(kv, KEY.artifact(artifactId), null) : null
 
-    const templateNames = Array.isArray(artifact.template_names)
-      ? artifact.template_names.map((item) => String(item || ''))
+    const releaseManifest =
+      artifact && artifact.manifest && typeof artifact.manifest === 'object' && !Array.isArray(artifact.manifest)
+        ? artifact.manifest
+        : null
+
+    const subscriptionOutbounds = Array.isArray(releaseManifest?.subscription_outbounds)
+      ? releaseManifest.subscription_outbounds
+      : []
+    if (subscriptionOutbounds.length === 0) continue
+
+    const templateNames = Array.isArray(releaseManifest?.template_names)
+      ? releaseManifest.template_names.map((item) => String(item || ''))
       : []
 
-    for (let index = 0; index < artifact.subscription_outbounds.length; index += 1) {
-      const t = artifact.subscription_outbounds[index]
+    for (let index = 0; index < subscriptionOutbounds.length; index += 1) {
+      const t = subscriptionOutbounds[index]
       const s = t.settings || {}
       const addr = resolveSubscriptionAddress(node)
       const outboundPort = Number(t.port ?? s.port)

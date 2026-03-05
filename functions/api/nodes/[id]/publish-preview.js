@@ -12,8 +12,8 @@ import { ok, fail } from '../../../_lib/response.js'
 
 function calcNextVersion(node) {
   const currentVersion = Number(node.current_version || 0) || 0
-  const targetVersion = Number(node.target_version || 0) || 0
-  return Math.max(currentVersion, targetVersion, 0) + 1
+  const desiredVersion = Number(node.desired_rev || 0) || 0
+  return Math.max(currentVersion, desiredVersion, 0) + 1
 }
 
 export async function onRequestPost({ request, env, params }) {
@@ -34,8 +34,7 @@ export async function onRequestPost({ request, env, params }) {
   for (const id of requestedTemplateIds) {
     const template = await resolveTemplateForApply(kv, id)
     if (!template) {
-      // Historical template ids may remain on node after template deletion.
-      // Ignore them in preview so legacy references don't block current publish flow.
+      // Ignore deleted template ids in preview.
       continue
     }
     if (!normalizeTemplateNodeTypes(template.node_types).includes(node.node_type)) {

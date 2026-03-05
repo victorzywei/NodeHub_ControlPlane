@@ -1,5 +1,5 @@
 import { requireAdmin } from '../../_lib/auth.js'
-import { KEY, indexRemove, indexUpsert, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
+import { KEY, indexRemove, indexUpsert, kvDelete, kvGetJson, kvPutJson, readIndex } from '../../_lib/kv.js'
 import { normalizeNode } from '../../_lib/node.js'
 import { ok, fail } from '../../_lib/response.js'
 
@@ -33,8 +33,6 @@ export async function onRequestPatch({ request, env, params }) {
 
   if (body.install_warp !== undefined) {
     node.install_warp = body.install_warp === true
-  } else if (body.warp_license !== undefined && String(body.warp_license || '').trim().length > 0) {
-    node.install_warp = true
   }
 
   if (body.install_cert !== undefined) {
@@ -43,13 +41,6 @@ export async function onRequestPatch({ request, env, params }) {
 
   if (body.install_argo !== undefined) {
     node.install_argo = body.install_argo === true
-  } else if (
-    body.argo_token !== undefined ||
-    body.argo_domain !== undefined
-  ) {
-    const token = String(body.argo_token !== undefined ? body.argo_token : node.argo_token || '').trim()
-    const domain = String(body.argo_domain !== undefined ? body.argo_domain : node.argo_domain || '').trim()
-    if (token || domain) node.install_argo = true
   }
 
   if (body.tags !== undefined) {
@@ -69,6 +60,12 @@ export async function onRequestDelete({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
+  const releaseIndex = await readIndex(kv, KEY.idxNodeReleases(params.id))
+  for (const row of releaseIndex) {
+    const rev = Number(row?.rev || row?.id || 0) || 0
+    if (rev > 0) await kvDelete(kv, KEY.release(params.id, rev))
+  }
+  await kvDelete(kv, KEY.idxNodeReleases(params.id))
   await kvDelete(kv, KEY.node(params.id))
   await indexRemove(kv, KEY.idxNodes, params.id)
   return ok({ deleted: params.id })

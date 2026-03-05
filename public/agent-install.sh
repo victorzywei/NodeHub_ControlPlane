@@ -192,15 +192,6 @@ done
   die "Missing required args: --api-base --node-id --node-token"
 }
 
-# Backward compatibility for older control-plane commands:
-# If explicit install flags are absent, infer intent from legacy params.
-if [[ "$INSTALL_WARP" -ne 1 && -n "$WARP_LICENSE" ]]; then
-  INSTALL_WARP=1
-fi
-if [[ "$INSTALL_ARGO" -ne 1 ]] && ([[ -n "$ARGO_TOKEN" ]] || [[ -n "$ARGO_DOMAIN" ]]); then
-  INSTALL_ARGO=1
-fi
-
 # ---------- Basic deps ----------
 require_or_install curl curl ca-certificates || die "curl is required (install it and retry)."
 # unzip/tar are needed for xray/sing-box extraction; try best-effort
@@ -1147,22 +1138,22 @@ extract_hook_tail() {
 }
 
 enqueue_apply_event() {
-  local status="$1" message="$2" error_code="${3:-}" target_version="${4:-}" current_version="${5:-}"
-  local msg code_json target_json current_json
+  local status="$1" message="$2" error_code="${3:-}" rev="${4:-}" current_version="${5:-}"
+  local msg code_json rev_json current_json
   msg="$(json_escape "$message")"
   code_json="$(json_escape "$error_code")"
-  if [[ "$target_version" =~ ^[0-9]+$ ]]; then
-    target_json="$target_version"
+  if [[ "$rev" =~ ^[0-9]+$ ]]; then
+    rev_json="$rev"
   else
-    target_json="null"
+    rev_json="null"
   fi
   if [[ "$current_version" =~ ^[0-9]+$ ]]; then
     current_json="$current_version"
   else
     current_json="null"
   fi
-  printf '{"type":"apply_result","status":"%s","error_code":"%s","message":"%s","target_version":%s,"current_version":%s}\n' \
-    "$status" "$code_json" "$msg" "$target_json" "$current_json" >> "$EVENTS_FILE"
+  printf '{"type":"apply_result","status":"%s","error_code":"%s","message":"%s","rev":%s,"current_version":%s}\n' \
+    "$status" "$code_json" "$msg" "$rev_json" "$current_json" >> "$EVENTS_FILE"
 }
 
 POST_EVENTS_HTTP=""
@@ -1230,24 +1221,25 @@ flush_pending_events() {
   return 1
 }
 
-apply_target_release() {
-  local target_version="$1" artifact_url="$2" artifact_sha256="$3" reload_cmd="$4"
+apply_desired_release() {
+  local rev="$1" artifact_url="$2" artifact_sha256="$3" reload_cmd="$4"
   local short_sha
   short_sha="${artifact_sha256:0:16}"
+  enqueue_apply_event "pending" "apply pending: rev=r${rev}; sha256=${short_sha}" "" "$rev" "$rev"
   [[ -n "$artifact_url" && -n "$artifact_sha256" ]] || {
     set_last_error "reconcile payload missing artifact"
-    enqueue_apply_event "failed" "apply failed: rev=r${target_version}; reason=artifact metadata missing; artifact_url_present=$([[ -n "$artifact_url" ]] && echo yes || echo no); sha256_present=$([[ -n "$artifact_sha256" ]] && echo yes || echo no)" "E_RECONCILE" "$target_version" "$target_version"
+    enqueue_apply_event "failed" "apply failed: rev=r${rev}; reason=artifact metadata missing; artifact_url_present=$([[ -n "$artifact_url" ]] && echo yes || echo no); sha256_present=$([[ -n "$artifact_sha256" ]] && echo yes || echo no)" "E_RECONCILE" "$rev" "$rev"
     return 1
   }
 
   if [[ ! -x "$APPLY_HOOK" ]]; then
     set_last_error "apply hook missing"
-    enqueue_apply_event "failed" "apply failed: rev=r${target_version}; reason=apply hook missing; hook=${APPLY_HOOK}" "E_HOOK" "$target_version" "$target_version"
+    enqueue_apply_event "failed" "apply failed: rev=r${rev}; reason=apply hook missing; hook=${APPLY_HOOK}" "E_HOOK" "$rev" "$rev"
     return 1
   fi
 
   local output="" err_code="" err_message="" err_detail="" hook_tail="" apply_detail="" failed_message="" success_message=""
-  if ! output="$("$APPLY_HOOK" "$target_version" "$artifact_url" "$artifact_sha256" "$reload_cmd" 2>&1)"; then
+  if ! output="$("$APPLY_HOOK" "$rev" "$artifact_url" "$artifact_sha256" "$reload_cmd" 2>&1)"; then
     err_code="$(extract_hook_field "ERROR_CODE" "$output")"
     err_message="$(extract_hook_field "ERROR_MESSAGE" "$output")"
     err_detail="$(extract_hook_field "ERROR_DETAIL" "$output")"
@@ -1255,29 +1247,42 @@ apply_target_release() {
     [[ -n "$err_code" ]] || err_code="E_APPLY"
     [[ -n "$err_message" ]] || err_message="artifact apply failed"
     set_last_error "$err_code: $err_message"
-    failed_message="apply failed: rev=r${target_version}; code=${err_code}; reason=${err_message}; sha256=${short_sha}"
+    failed_message="apply failed: rev=r${rev}; code=${err_code}; reason=${err_message}; sha256=${short_sha}"
     [[ -n "$err_detail" ]] && failed_message="${failed_message}; detail=${err_detail}"
     [[ -n "$hook_tail" ]] && failed_message="${failed_message}; output=${hook_tail}"
-    enqueue_apply_event "failed" "$failed_message" "$err_code" "$target_version" "$target_version"
+    enqueue_apply_event "failed" "$failed_message" "$err_code" "$rev" "$rev"
     return 1
   fi
 
   apply_detail="$(extract_hook_field "APPLY_DETAIL" "$output")"
-  if echo "$target_version" > "$VERSION_FILE"; then
+  if echo "$rev" > "$VERSION_FILE"; then
     clear_last_error
-    success_message="apply ok: rev=r${target_version}; sha256=${short_sha}; reload=$([[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]] && echo custom || echo default)"
+    success_message="apply ok: rev=r${rev}; sha256=${short_sha}; reload=$([[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]] && echo custom || echo default)"
     [[ -n "$apply_detail" ]] && success_message="${success_message}; detail=${apply_detail}"
-    enqueue_apply_event "ok" "$success_message" "" "$target_version" "$target_version"
+    enqueue_apply_event "applied" "$success_message" "" "$rev" "$rev"
+    enqueue_apply_event "healthy" "health ok: rev=r${rev}; sha256=${short_sha}" "" "$rev" "$rev"
     return 0
   fi
 
   set_last_error "E_STATE: failed to persist version"
-  enqueue_apply_event "failed" "apply failed: rev=r${target_version}; code=E_STATE; reason=failed to persist version; sha256=${short_sha}" "E_STATE" "$target_version" "$target_version"
+  enqueue_apply_event "failed" "apply failed: rev=r${rev}; code=E_STATE; reason=failed to persist version; sha256=${short_sha}" "E_STATE" "$rev" "$rev"
   return 1
 }
 
+jittered_sleep() {
+  local base="${1:-1}" jitter_max=0 jitter=0
+  [[ "$base" =~ ^[0-9]+$ ]] || base=1
+  [[ "$base" -lt 1 ]] && base=1
+  jitter_max=$((base / 4))
+  [[ "$jitter_max" -gt 10 ]] && jitter_max=10
+  if [[ "$jitter_max" -gt 0 ]]; then
+    jitter=$((RANDOM % (jitter_max + 1)))
+  fi
+  sleep "$((base + jitter))"
+}
+
 reconcile_once() {
-  local current_version response target_version needs_update artifact_url artifact_sha256 reload_cmd
+  local current_version response desired_rev needs_update artifact_url desired_sha256 reload_cmd
   current_version="$(read_current_version)"
 
   local rc_file rc_http rc_body
@@ -1293,10 +1298,10 @@ reconcile_once() {
     return 1
   fi
 
-  target_version="$(json_number_field "target_version" "$response")"
+  desired_rev="$(json_number_field "desired_rev" "$response")"
   needs_update="$(json_bool_field "needs_update" "$response")"
   artifact_url="$(json_string_field "artifact_url" "$response")"
-  artifact_sha256="$(json_string_field "sha256" "$response")"
+  desired_sha256="$(json_string_field "desired_sha256" "$response")"
   reload_cmd="$(json_string_field "reload_cmd" "$response")"
 
   if [[ "$needs_update" != "true" ]]; then
@@ -1304,18 +1309,18 @@ reconcile_once() {
     return 0
   fi
 
-  [[ -n "$target_version" ]] || {
+  [[ -n "$desired_rev" ]] || {
     set_last_error "invalid reconcile response"
     enqueue_apply_event "failed" "apply failed: rev=r${current_version}; code=E_RECONCILE; reason=invalid reconcile response; payload=${response}" "E_RECONCILE" "$current_version" "$current_version"
     return 1
   }
 
-  if [[ "$target_version" -le "$current_version" ]]; then
+  if [[ "$desired_rev" -le "$current_version" ]]; then
     clear_last_error
     return 0
   fi
 
-  apply_target_release "$target_version" "$artifact_url" "$artifact_sha256" "$reload_cmd"
+  apply_desired_release "$desired_rev" "$artifact_url" "$desired_sha256" "$reload_cmd"
 }
 
 heartbeat_loop() {
@@ -1333,7 +1338,7 @@ heartbeat_loop() {
       [[ "$extra" -gt 300 ]] && extra=300
       wait="$extra"
     fi
-    sleep "$wait"
+    jittered_sleep "$wait"
   done
 }
 
@@ -1353,7 +1358,7 @@ reconcile_loop() {
       [[ "$extra" -gt 300 ]] && extra=300
       wait="$extra"
     fi
-    sleep "$wait"
+    jittered_sleep "$wait"
   done
 }
 
@@ -1411,14 +1416,17 @@ source "$CONFIG_FILE"
 RELEASES_DIR="$STATE_DIR/releases"
 STAGING_ROOT="$STATE_DIR/staging"
 CURRENT_LINK="$STATE_DIR/current"
-PROTO_PIDFILE_LEGACY="$STATE_DIR/protocol.pid"
 CERT_CRT="${CONFIG_ROOT}/cert/server.crt"
 CERT_KEY="${CONFIG_ROOT}/cert/server.key"
+ARTIFACT_CACHE_DIR="$STATE_DIR/artifacts"
 
-mkdir -p "$RELEASES_DIR" "$STAGING_ROOT"
+mkdir -p "$RELEASES_DIR" "$STAGING_ROOT" "$ARTIFACT_CACHE_DIR"
 APPLY_STAGE="init"
 APPLY_ACTION_SING_BOX=""
 APPLY_ACTION_XRAY=""
+ROLLBACK_READY=0
+ROLLBACK_PREV_RELEASE=""
+ROLLBACK_DONE=0
 
 fail_with() {
   local code="$1" msg="$2" extra_detail="${3:-}"
@@ -1427,6 +1435,13 @@ fail_with() {
   [[ -n "$APPLY_ACTION_XRAY" ]] && detail="${detail}; action_xray=${APPLY_ACTION_XRAY}"
   [[ -n "$RELOAD_CMD" ]] && detail="${detail}; reload_cmd=${RELOAD_CMD}"
   [[ -n "$extra_detail" ]] && detail="${detail}; ${extra_detail}"
+  if [[ "${ROLLBACK_READY:-0}" == "1" && "${ROLLBACK_DONE:-0}" != "1" ]]; then
+    if restore_previous_release; then
+      detail="${detail}; rollback=ok"
+    else
+      detail="${detail}; rollback=failed"
+    fi
+  fi
   echo "ERROR_CODE=$code"
   echo "ERROR_MESSAGE=$msg"
   echo "ERROR_DETAIL=$detail"
@@ -1464,18 +1479,6 @@ calc_sha256_file() {
   fail_with "E_HASH" "no sha256 tool available"
 }
 
-decode_base64_to_file() {
-  local data="$1" outfile="$2"
-  if command -v base64 >/dev/null 2>&1; then
-    if printf '%s' "$data" | base64 -d > "$outfile" 2>/dev/null; then return 0; fi
-    if printf '%s' "$data" | base64 --decode > "$outfile" 2>/dev/null; then return 0; fi
-  fi
-  if command -v openssl >/dev/null 2>&1; then
-    if printf '%s' "$data" | openssl base64 -d -A > "$outfile" 2>/dev/null; then return 0; fi
-  fi
-  return 1
-}
-
 replace_token_file() {
   local token="$1" value="$2" file="$3" esc tmp
   esc="$(printf '%s' "$value" | sed 's/[\/&]/\\&/g')"
@@ -1484,28 +1487,48 @@ replace_token_file() {
   mv "$tmp" "$file"
 }
 
-extract_bundle() {
-  local bundle_file="$1" out_dir="$2"
-  local header line entry path b64
+extract_release_payload() {
+  local payload_file="$1" out_dir="$2"
 
-  header="$(head -n 1 "$bundle_file" | tr -d '\r')"
-  [[ "$header" == "NODEHUB-BUNDLE-V1" ]] || fail_with "E_PARSE" "invalid bundle header"
-
+  command -v tar >/dev/null 2>&1 || fail_with "E_PARSE" "tar command missing for package extraction"
   rm -rf "$out_dir"
   mkdir -p "$out_dir"
+  tar -xf "$payload_file" -C "$out_dir" || fail_with "E_PARSE" "failed to extract tar package"
+}
 
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%$'\r'}"
-    [[ "$line" == file=* ]] || continue
-    entry="${line#file=}"
-    path="${entry%%|*}"
-    b64="${entry#*|}"
-    [[ -n "$path" && "$path" != "$entry" ]] || fail_with "E_PARSE" "invalid file entry"
-    [[ "$path" != /* && "$path" != *".."* ]] || fail_with "E_PARSE" "unsafe path in bundle"
+download_artifact_payload() {
+  local artifact_url="$1" outfile="$2" cache_file="$3"
+  local tmp_file="${outfile}.tmp"
+  local head_file="${outfile}.head"
+  local http_code="" body_summary="" cache_sha=""
+  local if_none_match_args=()
 
-    mkdir -p "$(dirname "$out_dir/$path")"
-    decode_base64_to_file "$b64" "$out_dir/$path" || fail_with "E_PARSE" "failed to decode bundle file $path"
-  done < "$bundle_file"
+  if [[ -f "$cache_file" ]]; then
+    cache_sha="$(calc_sha256_file "$cache_file" 2>/dev/null || true)"
+    if [[ -n "$cache_sha" ]]; then
+      if_none_match_args=(-H "If-None-Match: \"$cache_sha\"")
+    fi
+  fi
+
+  http_code="$(curl -sS --max-time 60 -D "$head_file" -o "$tmp_file" -w "%{http_code}" \
+    "$artifact_url" -H "X-Node-Token: $NODE_TOKEN" "${if_none_match_args[@]}" 2>/dev/null || echo "000")"
+
+  if [[ "$http_code" == "304" ]]; then
+    [[ -f "$cache_file" ]] || fail_with "E_DOWNLOAD" "artifact 304 but local cache missing"
+    cp "$cache_file" "$outfile" || fail_with "E_DOWNLOAD" "failed to restore artifact cache"
+    rm -f "$tmp_file" "$head_file"
+    return 0
+  fi
+
+  if [[ ! "$http_code" =~ ^2 ]]; then
+    body_summary="$(tr -d '\r\n' < "$tmp_file" 2>/dev/null | head -c 240)"
+    rm -f "$tmp_file" "$head_file"
+    fail_with "E_DOWNLOAD" "artifact download failed" "http=${http_code}; body=${body_summary}"
+  fi
+
+  mv "$tmp_file" "$outfile"
+  cp "$outfile" "$cache_file" 2>/dev/null || true
+  rm -f "$head_file"
 }
 
 pidfile_for_engine() {
@@ -1574,10 +1597,6 @@ stop_pidfile_process() {
   rm -f "$pidfile"
 }
 
-stop_legacy_protocol() {
-  stop_pidfile_process "$PROTO_PIDFILE_LEGACY"
-}
-
 stop_protocol_engine() {
   local engine="$1" pidfile=""
   pidfile="$(pidfile_for_engine "$engine")" || return 0
@@ -1612,6 +1631,18 @@ start_protocol_engine() {
   echo "$pid" > "$pidfile"
   sleep 1
   kill -0 "$pid" 2>/dev/null || return 16
+  return 0
+}
+
+health_check_engine() {
+  local engine="$1" pidfile="" pid=""
+  pidfile="$(pidfile_for_engine "$engine")" || return 1
+  for _ in 1 2 3 4 5; do
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    [[ -n "$pid" ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 1
+  done
   return 0
 }
 
@@ -1671,30 +1702,73 @@ resolve_engine_actions() {
   action_sing_box="$(normalize_action "$(read_manifest_field "$release_dir" "ACTION_SING_BOX")")"
   action_xray="$(normalize_action "$(read_manifest_field "$release_dir" "ACTION_XRAY")")"
 
-  [[ -n "$action_sing_box" ]] || fail_with "E_PARSE" "ACTION_SING_BOX missing in bundle"
-  [[ -n "$action_xray" ]] || fail_with "E_PARSE" "ACTION_XRAY missing in bundle"
+  [[ -n "$action_sing_box" ]] || fail_with "E_PARSE" "ACTION_SING_BOX missing in package"
+  [[ -n "$action_xray" ]] || fail_with "E_PARSE" "ACTION_XRAY missing in package"
   printf '%s|%s\n' "$action_sing_box" "$action_xray"
+}
+
+normalize_action_safe() {
+  case "$1" in
+    apply|stop) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
+release_rev_from_dir() {
+  basename "$1" 2>/dev/null | sed -n 's/^r\([0-9][0-9]*\)$/\1/p' | head -n1
+}
+
+restore_previous_release() {
+  local prev="$ROLLBACK_PREV_RELEASE" prev_sing="" prev_xray="" prev_rev=""
+  [[ "${ROLLBACK_READY:-0}" == "1" ]] || return 0
+  [[ "${ROLLBACK_DONE:-0}" != "1" ]] || return 0
+  ROLLBACK_DONE=1
+  [[ -n "$prev" && -d "$prev" ]] || return 1
+
+  prev_sing="$(normalize_action_safe "$(read_manifest_field "$prev" "ACTION_SING_BOX")")"
+  prev_xray="$(normalize_action_safe "$(read_manifest_field "$prev" "ACTION_XRAY")")"
+  [[ -n "$prev_sing" ]] || { [[ -f "$prev/sing-box.json" ]] && prev_sing="apply" || prev_sing="stop"; }
+  [[ -n "$prev_xray" ]] || { [[ -f "$prev/xray.json" ]] && prev_xray="apply" || prev_xray="stop"; }
+  prev_rev="$(release_rev_from_dir "$prev")"
+
+  ln -sfn "$prev" "$CURRENT_LINK" || true
+  stop_protocol_engine "sing-box" || true
+  stop_protocol_engine "xray" || true
+
+  if [[ "$prev_sing" == "apply" ]]; then
+    start_protocol_engine "sing-box" "$prev" >/dev/null 2>&1 || true
+    [[ -n "$prev_rev" ]] && mark_engine_rev "sing-box" "$prev_rev" || true
+  fi
+  if [[ "$prev_xray" == "apply" ]]; then
+    start_protocol_engine "xray" "$prev" >/dev/null 2>&1 || true
+    [[ -n "$prev_rev" ]] && mark_engine_rev "xray" "$prev_rev" || true
+  fi
+  return 0
 }
 
 apply_release() {
   local rev="$1" artifact_url="$2" expected_sha="$3" reload_cmd="$4"
-  local tmp_dir bundle_file actual_sha release_dir stage_dir action_result
+  local tmp_dir package_file cache_file actual_sha release_dir stage_dir action_result
   local action_sing_box action_xray
   local reload_mode="default"
   local start_sing_box="no" start_xray="no" stop_sing_box="no" stop_xray="no"
   tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t nodehub-apply)"
-  bundle_file="$tmp_dir/bundle.txt"
+  package_file="$tmp_dir/artifact.pkg"
+  cache_file="$ARTIFACT_CACHE_DIR/r${rev}.pkg"
   stage_dir="$STAGING_ROOT/r${rev}"
   release_dir="$RELEASES_DIR/r${rev}"
+  ROLLBACK_PREV_RELEASE="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  ROLLBACK_READY=0
+  ROLLBACK_DONE=0
 
   APPLY_STAGE="download"
-  curl -fsS --max-time 60 "$artifact_url" -H "X-Node-Token: $NODE_TOKEN" -o "$bundle_file" || fail_with "E_DOWNLOAD" "artifact download failed"
+  download_artifact_payload "$artifact_url" "$package_file" "$cache_file"
   APPLY_STAGE="verify_sha256"
-  actual_sha="$(calc_sha256_file "$bundle_file")"
+  actual_sha="$(calc_sha256_file "$package_file")"
   [[ -n "$actual_sha" && "$actual_sha" == "$expected_sha" ]] || fail_with "E_HASH" "artifact sha256 mismatch"
 
-  APPLY_STAGE="extract_bundle"
-  extract_bundle "$bundle_file" "$stage_dir"
+  APPLY_STAGE="extract_payload"
+  extract_release_payload "$package_file" "$stage_dir"
   APPLY_STAGE="parse_manifest"
   action_result="$(resolve_engine_actions "$stage_dir")"
   action_sing_box="${action_result%%|*}"
@@ -1715,6 +1789,7 @@ apply_release() {
   rm -rf "$release_dir"
   mv "$stage_dir" "$release_dir"
   ln -sfn "$release_dir" "$CURRENT_LINK"
+  ROLLBACK_READY=1
 
   if [[ -n "$reload_cmd" && "$reload_cmd" != "nodehub-protocol-restart" ]]; then
     reload_mode="custom"
@@ -1722,7 +1797,6 @@ apply_release() {
     sh -lc "$reload_cmd" >/dev/null 2>&1 || fail_with "E_RELOAD" "custom reload command failed"
   else
     APPLY_STAGE="restart_protocol"
-    stop_legacy_protocol
     if [[ "$action_sing_box" == "stop" ]]; then
       stop_sing_box="yes"
       stop_protocol_engine "sing-box"
@@ -1755,10 +1829,23 @@ apply_release() {
     fi
   fi
 
+  if [[ "$reload_mode" == "default" ]]; then
+    if [[ "$action_sing_box" == "apply" ]]; then
+      APPLY_STAGE="health_sing_box"
+      health_check_engine "sing-box" || fail_with "E_HEALTH" "sing-box health check failed"
+    fi
+    if [[ "$action_xray" == "apply" ]]; then
+      APPLY_STAGE="health_xray"
+      health_check_engine "xray" || fail_with "E_HEALTH" "xray health check failed"
+    fi
+  fi
+
+  ROLLBACK_READY=0
+
   APPLY_STAGE="cleanup"
   rm -rf "$tmp_dir"
 
-  echo "APPLY_DETAIL=stage=done; rev=r${rev}; sha256=${actual_sha}; action_sing_box=${action_sing_box}; action_xray=${action_xray}; reload_mode=${reload_mode}; stop_sing_box=${stop_sing_box}; start_sing_box=${start_sing_box}; stop_xray=${stop_xray}; start_xray=${start_xray}"
+  echo "APPLY_DETAIL=stage=done; rev=r${rev}; sha256=${actual_sha}; action_sing_box=${action_sing_box}; action_xray=${action_xray}; reload_mode=${reload_mode}; stop_sing_box=${stop_sing_box}; start_sing_box=${start_sing_box}; stop_xray=${stop_xray}; start_xray=${start_xray}; format=tar"
 }
 
 [[ -n "$TARGET_REV" && -n "$ARTIFACT_URL" && -n "$EXPECTED_SHA256" ]] || fail_with "E_ARGS" "missing apply arguments"

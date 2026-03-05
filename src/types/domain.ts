@@ -44,7 +44,6 @@ export interface NodeRecord {
   cf_api_token?: string
   token: string
   online: boolean
-  target_version: number
   current_version: number
   last_seen_at: string | null
   deploy_info: string
@@ -64,21 +63,9 @@ export interface NodeRecord {
   xray_version: string
   xray_status: string
   applied_template_ids: string[]
-  target_artifact: {
-    id: string
-    rev: number
-    engine: string
-    engines: string[]
-    action_sing_box: string
-    action_xray: string
-    reload_cmd: string
-    sha256: string
-    summary: string
-    template_names: string[]
-    params: Record<string, unknown>
-    subscription_outbounds: ArtifactSubscriptionOutbound[]
-    created_at: string
-  } | null
+  desired_rev: number
+  desired_artifact_id: string
+  desired_sha256: string
   current_artifact: {
     id: string
     rev: number
@@ -87,9 +74,10 @@ export interface NodeRecord {
     summary: string
     applied_at: string
   } | null
-  last_release_status: 'idle' | 'pending' | 'ok' | 'failed'
+  last_release_status: 'idle' | 'pending' | 'applied' | 'healthy' | 'failed'
   last_release_error_code: string
   last_release_message: string
+  last_release_version?: number
 
   // WARP - user config (install param)
   install_warp: boolean

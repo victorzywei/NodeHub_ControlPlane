@@ -103,19 +103,98 @@ function randomUuid() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
-function base64EncodeUtf8(input) {
-  const bytes = new TextEncoder().encode(input)
+function base64EncodeBytes(bytes) {
   let binary = ''
-  for (const b of bytes) binary += String.fromCharCode(b)
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
   return btoa(binary)
 }
 
-async function sha256Hex(input) {
-  const bytes = new TextEncoder().encode(input)
+function base64EncodeUtf8(input) {
+  return base64EncodeBytes(new TextEncoder().encode(input))
+}
+
+async function sha256HexFromBytes(bytes) {
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
+}
+
+async function sha256Hex(input) {
+  return sha256HexFromBytes(new TextEncoder().encode(input))
+}
+
+function writeTarString(target, offset, size, value) {
+  const source = new TextEncoder().encode(String(value || ''))
+  const limit = Math.min(size, source.length)
+  for (let i = 0; i < limit; i += 1) target[offset + i] = source[i]
+}
+
+function writeTarOctal(target, offset, size, value) {
+  const oct = Math.max(0, Math.floor(Number(value) || 0)).toString(8).padStart(Math.max(1, size - 1), '0')
+  writeTarString(target, offset, size, oct)
+  target[offset + size - 1] = 0
+}
+
+function buildTarHeader(path, size) {
+  const safePath = String(path || '')
+  if (!safePath || safePath.length > 100 || safePath.startsWith('/') || safePath.includes('..')) {
+    throw new Error(`invalid tar entry path: ${safePath}`)
+  }
+
+  const header = new Uint8Array(512)
+  writeTarString(header, 0, 100, safePath)
+  writeTarOctal(header, 100, 8, 0o644)
+  writeTarOctal(header, 108, 8, 0)
+  writeTarOctal(header, 116, 8, 0)
+  writeTarOctal(header, 124, 12, size)
+  writeTarOctal(header, 136, 12, 0)
+  for (let i = 148; i < 156; i += 1) header[i] = 0x20
+  header[156] = '0'.charCodeAt(0)
+  writeTarString(header, 257, 6, 'ustar')
+  writeTarString(header, 263, 2, '00')
+  writeTarString(header, 265, 32, 'nodehub')
+  writeTarString(header, 297, 32, 'nodehub')
+
+  let checksum = 0
+  for (let i = 0; i < header.length; i += 1) checksum += header[i]
+  const oct = checksum.toString(8).padStart(6, '0')
+  writeTarString(header, 148, 6, oct)
+  header[154] = 0
+  header[155] = 0x20
+  return header
+}
+
+function buildTarArchive(files) {
+  const encoder = new TextEncoder()
+  const chunks = []
+  let total = 0
+  const ordered = [...(files || [])].sort((a, b) => String(a.path || '').localeCompare(String(b.path || '')))
+
+  for (const file of ordered) {
+    const path = String(file.path || '')
+    const content = String(file.content || '')
+    const body = encoder.encode(content)
+    const header = buildTarHeader(path, body.length)
+    const pad = (512 - (body.length % 512)) % 512
+
+    chunks.push(header)
+    chunks.push(body)
+    if (pad > 0) chunks.push(new Uint8Array(pad))
+    total += header.length + body.length + pad
+  }
+
+  const footer = new Uint8Array(1024)
+  chunks.push(footer)
+  total += footer.length
+
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.length
+  }
+  return out
 }
 
 function summarizeParams(params) {
@@ -967,12 +1046,15 @@ function toManifestEnv(manifest) {
   ].join('\n') + '\n'
 }
 
-function buildBundleText({ rev, engine, reloadCmd, files }) {
-  const lines = ['NODEHUB-BUNDLE-V1', `rev=${rev}`, `engine=${engine}`, `reload_cmd=${reloadCmd}`]
-  for (const file of files) {
-    lines.push(`file=${file.path}|${base64EncodeUtf8(file.content)}`)
+function toArtifactFilesMap(files) {
+  const rows = {}
+  for (const file of files || []) {
+    const path = String(file?.path || '')
+    if (!path) continue
+    if (path.startsWith('/') || path.includes('..')) continue
+    rows[path] = String(file?.content || '')
   }
-  return lines.join('\n') + '\n'
+  return rows
 }
 
 function buildConfigObject(engine, templates, params, node) {
@@ -1066,8 +1148,10 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
     files.push(buildConfigFile(group.engine, group.templates, params, node))
   }
 
-  const bundle = buildBundleText({ rev, engine: selectedEngine, reloadCmd, files })
-  const sha256 = await sha256Hex(bundle)
+  const filesMap = toArtifactFilesMap(files)
+  const packageBytes = buildTarArchive(files)
+  const packageBase64 = base64EncodeBytes(packageBytes)
+  const sha256 = await sha256HexFromBytes(packageBytes)
 
   return {
     rev,
@@ -1081,6 +1165,9 @@ export async function buildNodeArtifactBundle({ node, rev, operationId, template
     template_names: templateNames,
     params,
     subscription_outbounds: subscriptionOutbounds,
-    bundle,
+    manifest,
+    files: filesMap,
+    package_format: 'tar',
+    package_base64: packageBase64,
   }
 }

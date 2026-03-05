@@ -71,7 +71,7 @@ async function applyHeartbeat(node, report, kv) {
 
   return ok({
     node_id: node.id,
-    target_version: Number(node.target_version || 0) || 0,
+    desired_rev: Number(node.desired_rev || 0) || 0,
     current_version: Number(node.current_version || 0) || 0,
     last_seen_at: node.last_seen_at,
     heartbeat_reported_at: node.heartbeat_reported_at || null,

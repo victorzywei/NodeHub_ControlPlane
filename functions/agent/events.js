@@ -1,7 +1,8 @@
 import { KEY, kvGetJson, kvPutJson } from '../_lib/kv.js'
+import { canAdvanceStatus, getRelease, putRelease } from '../_lib/release.js'
 import { ok, fail } from '../_lib/response.js'
 
-const APPLY_STATUSES = new Set(['pending', 'ok', 'failed'])
+const APPLY_STATUSES = new Set(['pending', 'applied', 'healthy', 'failed'])
 const GENERIC_EVENT_MESSAGES = new Set([
   'artifact applied',
   'release apply failed',
@@ -31,23 +32,33 @@ function normalizeVersion(value) {
   return Math.floor(num)
 }
 
+function normalizeStatus(value) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!APPLY_STATUSES.has(raw)) return ''
+  return raw
+}
+
 function joinMessage(parts) {
   return normalizeMessage(parts.filter(Boolean).join('; '))
+}
+
+function resolveDesired(node) {
+  const rev = Number(node.desired_rev || 0) || 0
+  const artifactId = String(node.desired_artifact_id || '').trim()
+  const sha256 = String(node.desired_sha256 || '').trim()
+  return { rev, artifactId, sha256 }
 }
 
 function buildStatusMessage(node, event, releaseVersion) {
   const release = `rev=r${releaseVersion}`
   const current = `current=r${Number(node.current_version || 0)}`
-  const target = `target=r${Number(node.target_version || 0)}`
+  const desired = `desired=r${Number(node.desired_rev || 0)}`
   const code = event.error_code ? `code=${event.error_code}` : ''
 
-  if (event.status === 'ok') {
-    return joinMessage(['apply ok', release, current, target])
-  }
-  if (event.status === 'failed') {
-    return joinMessage(['apply failed', release, current, target, code || 'code=E_APPLY'])
-  }
-  return joinMessage(['apply pending', release, current, target])
+  if (event.status === 'healthy') return joinMessage(['health ok', release, current, desired])
+  if (event.status === 'applied') return joinMessage(['apply ok', release, current, desired])
+  if (event.status === 'failed') return joinMessage(['apply failed', release, current, desired, code || 'code=E_APPLY'])
+  return joinMessage(['apply pending', release, current, desired])
 }
 
 function resolveEventMessage(node, event, releaseVersion) {
@@ -64,89 +75,55 @@ function normalizeEvent(raw) {
   const type = String(raw.type || 'apply_result')
   if (type !== 'apply_result') return null
 
-  const status = String(raw.status || '')
-  if (!APPLY_STATUSES.has(status)) return null
+  const status = normalizeStatus(raw.status)
+  if (!status) return null
 
-  const targetVersion = normalizeVersion(raw.target_version ?? raw.version ?? raw.rev)
+  const rev = normalizeVersion(raw.rev)
   const currentVersion = normalizeVersion(raw.current_version)
 
   return {
     status,
     error_code: normalizeErrorCode(raw.error_code),
     message: normalizeMessage(raw.message || raw.log || raw.detail),
-    target_version: targetVersion,
+    rev,
     current_version: currentVersion,
   }
 }
 
-function getTarget(node) {
-  const targetArtifact =
-    node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
-      ? node.target_artifact
-      : null
-  const targetVersion = targetArtifact
-    ? Number(targetArtifact.rev || 0)
-    : Number(node.target_version || 0)
-  return { targetArtifact, targetVersion }
-}
-
-function setCurrentFromTarget(node, appliedAt) {
-  const { targetArtifact, targetVersion } = getTarget(node)
-  if (!targetArtifact || targetVersion <= 0) return false
-
-  node.current_version = targetVersion
+function setNodeCurrentFromDesired(node, desired, artifact, nowIso) {
+  if (!desired.artifactId || desired.rev <= 0) return false
+  node.current_version = desired.rev
   node.current_artifact = {
-    id: String(targetArtifact.id || ''),
-    rev: targetVersion,
-    engine: String(targetArtifact.engine || ''),
-    sha256: String(targetArtifact.sha256 || ''),
-    summary: String(targetArtifact.summary || ''),
-    applied_at: appliedAt,
+    id: desired.artifactId,
+    rev: desired.rev,
+    engine: String(artifact?.engine || ''),
+    sha256: desired.sha256,
+    summary: String(artifact?.summary || ''),
+    applied_at: nowIso,
   }
   return true
 }
 
-function resolveEventVersion(node, event) {
-  const { targetVersion: nodeTargetVersion } = getTarget(node)
-  const targetVersion = event.target_version ?? nodeTargetVersion
-  // Older agents may not send current_version; treat as reporting the target release.
-  const currentVersion = event.current_version ?? targetVersion
-  return {
-    nodeTargetVersion,
-    targetVersion,
-    currentVersion,
+function updateReleaseStatus(release, event, message, nowIso) {
+  const next = { ...(release || {}) }
+  next.status = event.status
+  next.error_code = event.status === 'failed' ? event.error_code || '' : ''
+  next.message = message
+  next.updated_at = nowIso
+  if (event.status === 'applied') next.applied_at = nowIso
+  if (event.status === 'healthy') {
+    if (!next.applied_at) next.applied_at = nowIso
+    next.healthy_at = nowIso
   }
+  if (event.status === 'failed') next.failed_at = nowIso
+  return next
 }
 
-function isSameVersionStatus(node, event, releaseVersion) {
-  const status = String(node.last_release_status || '')
-  const version = Number(node.last_release_version || 0) || 0
-  return version === releaseVersion && status === event.status
-}
-
-function applyEvent(node, event, nowIso, releaseVersion) {
-  if (event.status === 'ok') {
-    setCurrentFromTarget(node, nowIso)
-    node.last_release_status = 'ok'
-    node.last_release_error_code = ''
-    node.last_release_message = resolveEventMessage(node, event, releaseVersion)
-    node.last_release_version = releaseVersion
-    return true
-  }
-
-  if (event.status === 'failed') {
-    node.last_release_status = 'failed'
-    node.last_release_error_code = event.error_code || ''
-    node.last_release_message = resolveEventMessage(node, event, releaseVersion)
-    node.last_release_version = releaseVersion
-    return true
-  }
-
-  node.last_release_status = 'pending'
-  node.last_release_error_code = ''
-  node.last_release_message = resolveEventMessage(node, event, releaseVersion)
-  node.last_release_version = releaseVersion
-  return true
+function isDuplicateEvent(release, event) {
+  const currentStatus = String(release?.status || '')
+  if (!currentStatus) return false
+  if (currentStatus === event.status) return true
+  return !canAdvanceStatus(currentStatus, event.status)
 }
 
 export async function onRequestPost({ request, env }) {
@@ -165,13 +142,14 @@ export async function onRequestPost({ request, env }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.token !== token) return fail('UNAUTHORIZED', 'Invalid node token', 401)
 
-  node.target_version = Number(node.target_version || 0) || 0
+  node.desired_rev = Number(node.desired_rev || 0) || 0
   node.current_version = Number(node.current_version || 0) || 0
   node.last_release_version = Number(node.last_release_version || 0) || 0
 
   let accepted = 0
   let rejected = 0
   const nowIso = new Date().toISOString()
+  const desired = resolveDesired(node)
 
   for (const rawEvent of rawEvents) {
     const event = normalizeEvent(rawEvent)
@@ -180,27 +158,61 @@ export async function onRequestPost({ request, env }) {
       continue
     }
 
-    const versions = resolveEventVersion(node, event)
-    if (versions.targetVersion <= 0 || versions.targetVersion !== versions.nodeTargetVersion) {
+    const rev = event.rev
+    if (rev === null || rev <= 0 || rev !== desired.rev) {
       rejected += 1
       continue
     }
 
-    if (isSameVersionStatus(node, event, versions.targetVersion)) {
+    const desiredArtifact = desired.artifactId
+      ? await kvGetJson(kv, KEY.artifact(desired.artifactId), null)
+      : null
+    if (!desiredArtifact) {
       rejected += 1
       continue
     }
 
-    if (!applyEvent(node, event, nowIso, versions.targetVersion)) {
+    const message = resolveEventMessage(node, event, rev)
+    const currentRelease = await getRelease(kv, node.id, rev)
+    const baseRelease = currentRelease || {
+      id: `${node.id}:r${rev}`,
+      node_id: node.id,
+      rev,
+      artifact_id: desired.artifactId,
+      artifact_sha256: desired.sha256,
+      status: 'pending',
+      summary: '',
+      template_names: [],
+      error_code: '',
+      message: '',
+      desired_at: nowIso,
+      applied_at: '',
+      healthy_at: '',
+      failed_at: '',
+      updated_at: nowIso,
+    }
+
+    if (isDuplicateEvent(baseRelease, event)) {
       rejected += 1
       continue
     }
 
+    const nextRelease = updateReleaseStatus(baseRelease, event, message, nowIso)
+    await putRelease(kv, nextRelease)
+
+    if (event.status === 'healthy') {
+      setNodeCurrentFromDesired(node, desired, desiredArtifact, nowIso)
+    }
+
+    node.last_release_status = event.status
+    node.last_release_error_code = event.status === 'failed' ? (event.error_code || '') : ''
+    node.last_release_message = message
+    node.last_release_version = rev
+    node.updated_at = nowIso
     accepted += 1
   }
 
   if (accepted > 0) {
-    node.updated_at = nowIso
     await kvPutJson(kv, KEY.node(node.id), node)
   }
 
@@ -209,8 +221,8 @@ export async function onRequestPost({ request, env }) {
     accepted,
     rejected,
     current_version: Number(node.current_version || 0),
-    last_release_status: node.last_release_status,
-    last_release_message: node.last_release_message,
+    last_release_status: String(node.last_release_status || ''),
+    last_release_message: String(node.last_release_message || ''),
     last_release_error_code: String(node.last_release_error_code || ''),
     last_release_version: Number(node.last_release_version || 0),
   })

@@ -2,41 +2,6 @@ import { requireAdmin } from '../../../_lib/auth.js'
 import { KEY, kvGetJson } from '../../../_lib/kv.js'
 import { ok, fail } from '../../../_lib/response.js'
 
-function decodeBase64Utf8(value) {
-  try {
-    const binary = atob(String(value || ''))
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-    return new TextDecoder().decode(bytes)
-  } catch {
-    return ''
-  }
-}
-
-function parseBundleFiles(bundleText) {
-  const files = {}
-  const text = String(bundleText || '')
-  if (!text) return files
-
-  const lines = text.split(/\r?\n/)
-  if (lines[0] !== 'NODEHUB-BUNDLE-V1') return files
-
-  for (const line of lines) {
-    if (!line.startsWith('file=')) continue
-    const entry = line.slice(5)
-    const sep = entry.indexOf('|')
-    if (sep <= 0) continue
-
-    const path = entry.slice(0, sep)
-    const encoded = entry.slice(sep + 1)
-    if (!path || path.startsWith('/') || path.includes('..')) continue
-
-    files[path] = decodeBase64Utf8(encoded)
-  }
-
-  return files
-}
-
 function parseManifestEnv(text) {
   const result = {}
   const lines = String(text || '').split(/\r?\n/)
@@ -53,11 +18,34 @@ function parseManifestEnv(text) {
   return result
 }
 
+function parseJsonText(text) {
+  try {
+    const value = JSON.parse(String(text || ''))
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    return value
+  } catch {
+    return null
+  }
+}
+
 function parseCsvList(value) {
   return String(value || '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function normalizeArtifactFiles(artifact) {
+  if (artifact && artifact.files && typeof artifact.files === 'object' && !Array.isArray(artifact.files)) {
+    const rows = {}
+    for (const [path, content] of Object.entries(artifact.files)) {
+      const key = String(path || '').trim()
+      if (!key || key.startsWith('/') || key.includes('..')) continue
+      rows[key] = String(content || '')
+    }
+    return rows
+  }
+  return {}
 }
 
 function buildConfigViews(files) {
@@ -105,16 +93,21 @@ async function buildArtifactView(kv, nodeId, artifactRef) {
     }
   }
 
-  const files = parseBundleFiles(artifact.bundle)
+  const files = normalizeArtifactFiles(artifact)
+  const manifestJson = artifact?.manifest && typeof artifact.manifest === 'object' && !Array.isArray(artifact.manifest)
+    ? artifact.manifest
+    : parseJsonText(files['manifest.json'] || '')
   const manifestEnv = parseManifestEnv(files['manifest.env'] || '')
   const configs = buildConfigViews(files)
   const configFile = pickPrimaryConfig(configs, artifact.engine || artifactRef.engine)
   const engines =
     Array.isArray(artifact.engines) && artifact.engines.length > 0
       ? artifact.engines.map((item) => String(item))
-      : parseCsvList(manifestEnv.ENGINES)
-  const actionSingBox = String(artifact.action_sing_box || manifestEnv.ACTION_SING_BOX || '')
-  const actionXray = String(artifact.action_xray || manifestEnv.ACTION_XRAY || '')
+      : Array.isArray(manifestJson?.engines)
+        ? manifestJson.engines.map((item) => String(item))
+        : parseCsvList(manifestEnv.ENGINES)
+  const actionSingBox = String(artifact.action_sing_box || manifestJson?.action_sing_box || manifestEnv.ACTION_SING_BOX || '')
+  const actionXray = String(artifact.action_xray || manifestJson?.action_xray || manifestEnv.ACTION_XRAY || '')
 
   return {
     id: String(artifact.id || artifactId),
@@ -140,10 +133,16 @@ export async function onRequestGet({ request, env, params }) {
   const node = await kvGetJson(kv, KEY.node(params.id), null)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
-  const targetArtifact =
-    node.target_artifact && typeof node.target_artifact === 'object' && !Array.isArray(node.target_artifact)
-      ? node.target_artifact
-      : null
+  const desiredRev = Number(node.desired_rev || 0) || 0
+  const desiredArtifactId = String(node.desired_artifact_id || '').trim()
+  const desiredSha = String(node.desired_sha256 || '')
+  const targetArtifact = desiredArtifactId
+    ? {
+      id: desiredArtifactId,
+      rev: desiredRev,
+      sha256: desiredSha,
+    }
+    : null
   const currentArtifact =
     node.current_artifact && typeof node.current_artifact === 'object' && !Array.isArray(node.current_artifact)
       ? node.current_artifact

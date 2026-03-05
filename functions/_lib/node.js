@@ -49,16 +49,13 @@ export function normalizeNode(node) {
   const nowMs = Date.now()
   const lastSeen = node.last_seen_at ? new Date(node.last_seen_at).getTime() : 0
   const online = nowMs - lastSeen <= ONLINE_WINDOW_MS
-  const targetArtifact = toArtifactRef(node.target_artifact)
   const currentArtifact = toArtifactRef(node.current_artifact)
-  const targetVersion = toVersion(node.target_version)
+  const desiredRev = toVersion(node.desired_rev)
+  const desiredArtifactId = toString(node.desired_artifact_id)
+  const desiredSha256 = toString(node.desired_sha256)
   const currentVersion = toVersion(node.current_version)
-  const installWarp = node.install_warp !== undefined
-    ? toBool(node.install_warp)
-    : toString(node.warp_license).trim().length > 0
-  const installArgo = node.install_argo !== undefined
-    ? toBool(node.install_argo)
-    : (toString(node.argo_token).trim().length > 0 || toString(node.argo_domain).trim().length > 0)
+  const installWarp = toBool(node.install_warp)
+  const installArgo = toBool(node.install_argo)
   const installCert = node.install_cert !== undefined ? toBool(node.install_cert) : true
 
   return {
@@ -94,13 +91,15 @@ export function normalizeNode(node) {
     xray_version: toString(node.xray_version),
     xray_status: toString(node.xray_status),
     applied_template_ids: toStringArray(node.applied_template_ids),
-    target_version: targetVersion,
+    desired_rev: desiredRev,
+    desired_artifact_id: desiredArtifactId,
+    desired_sha256: desiredSha256,
     current_version: currentVersion,
-    target_artifact: targetArtifact,
     current_artifact: currentArtifact,
     last_release_error_code: toString(node.last_release_error_code),
     last_release_status: toString(node.last_release_status || 'idle'),
     last_release_message: toString(node.last_release_message),
+    last_release_version: toVersion(node.last_release_version),
 
     // WARP - user config
     install_warp: installWarp,
