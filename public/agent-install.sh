@@ -776,6 +776,36 @@ if [[ "$INSTALL_WARP" -eq 1 ]]; then
 fi
 
 # ---------- Start Argo tunnel ----------
+latest_argo_domain_from_log() {
+  local log_file="${1:-$STATE_DIR/argo.log}"
+  [[ -f "$log_file" ]] || return 0
+  grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -n1 | sed 's|https://||'
+}
+
+resolve_argo_domain() {
+  if [[ -n "${ARGO_DOMAIN:-}" ]]; then
+    printf '%s' "$ARGO_DOMAIN"
+    return 0
+  fi
+
+  local domain=""
+  domain="$(latest_argo_domain_from_log "$STATE_DIR/argo.log")"
+  if [[ -n "$domain" ]]; then
+    printf '%s' "$domain"
+    return 0
+  fi
+
+  if [[ -f "$STATE_DIR/argo-domain" ]]; then
+    cat "$STATE_DIR/argo-domain" 2>/dev/null || true
+  fi
+}
+
+persist_argo_domain() {
+  local domain=""
+  domain="$(resolve_argo_domain)"
+  [[ -n "$domain" ]] && echo "$domain" > "$STATE_DIR/argo-domain"
+}
+
 start_argo_tunnel() {
   local argo_pidfile="$STATE_DIR/cloudflared.pid"
 
@@ -797,8 +827,10 @@ start_argo_tunnel() {
     log "Starting Argo fixed tunnel..."
     nohup "$cf_bin" tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$ARGO_TOKEN" > "$STATE_DIR/argo.log" 2>&1 &
     echo $! > "$argo_pidfile"
-    [[ -n "$ARGO_DOMAIN" ]] && echo "$ARGO_DOMAIN" > "$STATE_DIR/argo-domain"
-    log "Argo fixed tunnel started (domain: ${ARGO_DOMAIN:-<from-dashboard>})"
+    persist_argo_domain
+    local fixed_domain
+    fixed_domain="$(resolve_argo_domain)"
+    log "Argo fixed tunnel started (domain: ${fixed_domain:-<from-dashboard>})"
   else
     # Temp tunnel — find the first listening port from templates
     local temp_port=0
@@ -809,8 +841,8 @@ start_argo_tunnel() {
     echo $! > "$argo_pidfile"
     sleep 8
     local temp_domain
-    temp_domain="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo.log" 2>/dev/null | head -n1 | sed 's|https://||')"
-    [[ -n "$temp_domain" ]] && echo "$temp_domain" > "$STATE_DIR/argo-domain"
+    temp_domain="$(resolve_argo_domain)"
+    persist_argo_domain
     log "Argo temp tunnel started (domain: ${temp_domain:-<pending>})"
   fi
 }
@@ -1013,6 +1045,30 @@ disk_stats() {
   echo "$used_gb $total_gb $usage_percent"
 }
 
+latest_argo_domain_from_log() {
+  local log_file="$STATE_DIR/argo.log"
+  [[ -f "$log_file" ]] || return 0
+  grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -n1 | sed 's|https://||'
+}
+
+resolve_argo_domain() {
+  if [[ -n "${ARGO_DOMAIN:-}" ]]; then
+    printf '%s' "$ARGO_DOMAIN"
+    return 0
+  fi
+
+  local domain=""
+  domain="$(latest_argo_domain_from_log)"
+  if [[ -n "$domain" ]]; then
+    printf '%s' "$domain"
+    return 0
+  fi
+
+  if [[ -f "$STATE_DIR/argo-domain" ]]; then
+    cat "$STATE_DIR/argo-domain" 2>/dev/null || true
+  fi
+}
+
 build_heartbeat_payload() {
   local current_version deploy_info protocol_version error_message cpu_usage cpu_cores install_mode
   local memory_used memory_total memory_usage
@@ -1085,15 +1141,8 @@ build_heartbeat_payload() {
       argo_status="stopped"
     fi
   fi
-  if [[ -f "$STATE_DIR/argo-domain" ]]; then
-    argo_temp_domain="$(cat "$STATE_DIR/argo-domain" 2>/dev/null || true)"
-  fi
-  if [[ -z "$argo_temp_domain" && -n "${ARGO_DOMAIN:-}" ]]; then
-    argo_temp_domain="$ARGO_DOMAIN"
-  fi
-  if [[ -z "$argo_temp_domain" && -f "$STATE_DIR/argo.log" ]]; then
-    argo_temp_domain="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo.log" 2>/dev/null | tail -n1 | sed 's|https://||')"
-  fi
+  argo_temp_domain="$(resolve_argo_domain)"
+  [[ -n "$argo_temp_domain" ]] && echo "$argo_temp_domain" > "$STATE_DIR/argo-domain"
   argo_json="$(json_escape "$argo_status")"
   argo_domain_json="$(json_escape "$argo_temp_domain")"
 

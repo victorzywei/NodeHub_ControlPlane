@@ -490,11 +490,12 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
         copyLabel: 'Argo 重启命令',
         command: buildCommandGroup([
           'pkill -f cloudflared || true',
+          `rm -f ${stateDir}/argo-domain`,
           `nohup cloudflared tunnel --url "http://localhost:${argoPort}" --edge-ip-version auto --no-autoupdate --protocol http2 > ${stateDir}/argo.log 2>&1 &`,
           `echo $! > ${stateDir}/cloudflared.pid`,
-          'sleep 2',
+          'sleep 4',
           'pgrep -fa cloudflared',
-          `grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' ${stateDir}/argo.log | tail -n 1`,
+          `ARGO_URL="$(grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' ${stateDir}/argo.log | tail -n 1)"; [ -n "$ARGO_URL" ] && echo "$ARGO_URL" | sed 's|https://||' > ${stateDir}/argo-domain; echo "$ARGO_URL"`,
         ]),
       })
     }
