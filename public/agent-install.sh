@@ -1660,16 +1660,58 @@ stop_pidfile_process() {
   rm -f "$pidfile"
 }
 
+list_engine_pids_by_signature() {
+  local engine="$1" signature=""
+  case "$engine" in
+    sing-box) signature="sing-box run -c $STATE_DIR/releases/" ;;
+    xray) signature="xray run -config $STATE_DIR/releases/" ;;
+    *) return 0 ;;
+  esac
+  ps -eo pid=,args= 2>/dev/null | awk -v sig="$signature" 'index($0, sig) > 0 { print $1 }'
+}
+
+stop_stale_engine_processes() {
+  local engine="$1"
+  local pids="" pid=""
+  pids="$(list_engine_pids_by_signature "$engine" || true)"
+  [[ -n "${pids//[[:space:]]/}" ]] || return 0
+
+  for pid in $pids; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$pid" == "$$" ]] && continue
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 1
+  for pid in $pids; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$pid" == "$$" ]] && continue
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  done
+}
+
 stop_protocol_engine() {
   local engine="$1" pidfile=""
   pidfile="$(pidfile_for_engine "$engine")" || return 0
   stop_pidfile_process "$pidfile"
+  stop_stale_engine_processes "$engine"
   clear_engine_rev "$engine"
+}
+
+spawn_protocol_engine() {
+  local engine="$1" release_dir="$2" logfile="$3"
+  if [[ "$engine" == "sing-box" ]]; then
+    nohup sing-box run -c "$release_dir/sing-box.json" > "$logfile" 2>&1 &
+  elif [[ "$engine" == "xray" ]]; then
+    nohup xray run -config "$release_dir/xray.json" > "$logfile" 2>&1 &
+  else
+    return 15
+  fi
+  printf '%s\n' "$!"
 }
 
 start_protocol_engine() {
   local engine="$1" release_dir="$2"
-  local config_file="" pidfile="" logfile=""
+  local config_file="" pidfile="" logfile="" pid=""
   pidfile="$(pidfile_for_engine "$engine")" || return 15
   logfile="$(logfile_for_engine "$engine")" || return 15
 
@@ -1680,17 +1722,24 @@ start_protocol_engine() {
     config_file="$release_dir/sing-box.json"
     [[ -f "$config_file" ]] || return 11
     command -v sing-box >/dev/null 2>&1 || return 12
-    nohup sing-box run -c "$config_file" > "$logfile" 2>&1 &
   elif [[ "$engine" == "xray" ]]; then
     config_file="$release_dir/xray.json"
     [[ -f "$config_file" ]] || return 13
     command -v xray >/dev/null 2>&1 || return 14
-    nohup xray run -config "$config_file" > "$logfile" 2>&1 &
   else
     return 15
   fi
 
-  local pid="$!"
+  pid="$(spawn_protocol_engine "$engine" "$release_dir" "$logfile")" || return 15
+  echo "$pid" > "$pidfile"
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+
+  # Retry once after reclaiming stale NodeHub-managed engine processes.
+  stop_stale_engine_processes "$engine"
+  pid="$(spawn_protocol_engine "$engine" "$release_dir" "$logfile")" || return 15
   echo "$pid" > "$pidfile"
   sleep 1
   kill -0 "$pid" 2>/dev/null || return 16
@@ -1848,6 +1897,12 @@ apply_release() {
     validate_release_engine "xray" "$stage_dir"
   fi
 
+  APPLY_STAGE="pre_stop_protocol"
+  stop_sing_box="yes"
+  stop_xray="yes"
+  stop_protocol_engine "sing-box"
+  stop_protocol_engine "xray"
+
   APPLY_STAGE="activate_release"
   rm -rf "$release_dir"
   mv "$stage_dir" "$release_dir"
@@ -1860,35 +1915,19 @@ apply_release() {
     sh -lc "$reload_cmd" >/dev/null 2>&1 || fail_with "E_RELOAD" "custom reload command failed"
   else
     APPLY_STAGE="restart_protocol"
-    if [[ "$action_sing_box" == "stop" ]]; then
-      stop_sing_box="yes"
-      stop_protocol_engine "sing-box"
-    fi
-    if [[ "$action_xray" == "stop" ]]; then
-      stop_xray="yes"
-      stop_protocol_engine "xray"
-    fi
     if [[ "$action_sing_box" == "apply" ]]; then
-      if ! is_engine_running_rev "sing-box" "$rev"; then
-        stop_sing_box="yes"
-        stop_protocol_engine "sing-box"
-        APPLY_STAGE="start_sing_box"
-        start_protocol_engine "sing-box" "$release_dir" || fail_with "E_HEALTH" "failed to start sing-box process"
-        start_sing_box="yes"
-        APPLY_STAGE="mark_sing_box_revision"
-        mark_engine_rev "sing-box" "$rev" || fail_with "E_STATE" "failed to persist sing-box revision marker"
-      fi
+      APPLY_STAGE="start_sing_box"
+      start_protocol_engine "sing-box" "$release_dir" || fail_with "E_HEALTH" "failed to start sing-box process"
+      start_sing_box="yes"
+      APPLY_STAGE="mark_sing_box_revision"
+      mark_engine_rev "sing-box" "$rev" || fail_with "E_STATE" "failed to persist sing-box revision marker"
     fi
     if [[ "$action_xray" == "apply" ]]; then
-      if ! is_engine_running_rev "xray" "$rev"; then
-        stop_xray="yes"
-        stop_protocol_engine "xray"
-        APPLY_STAGE="start_xray"
-        start_protocol_engine "xray" "$release_dir" || fail_with "E_HEALTH" "failed to start xray process"
-        start_xray="yes"
-        APPLY_STAGE="mark_xray_revision"
-        mark_engine_rev "xray" "$rev" || fail_with "E_STATE" "failed to persist xray revision marker"
-      fi
+      APPLY_STAGE="start_xray"
+      start_protocol_engine "xray" "$release_dir" || fail_with "E_HEALTH" "failed to start xray process"
+      start_xray="yes"
+      APPLY_STAGE="mark_xray_revision"
+      mark_engine_rev "xray" "$rev" || fail_with "E_STATE" "failed to persist xray revision marker"
     fi
   fi
 
