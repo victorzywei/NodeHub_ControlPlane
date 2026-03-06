@@ -37,8 +37,8 @@ export interface NodeRecord {
   region: string
   tags: string[]
   install_cert: boolean
-  entry_cdn: string
-  entry_direct: string
+  primary_domain: string
+  backup_domain: string
   entry_ip: string
   github_mirror?: string
   cf_api_token?: string

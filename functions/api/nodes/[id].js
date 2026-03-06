@@ -28,7 +28,7 @@ export async function onRequestPatch({ request, env, params }) {
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))
-  const stringFields = ['name', 'region', 'entry_cdn', 'entry_direct', 'entry_ip', 'github_mirror', 'cf_api_token',
+  const stringFields = ['name', 'region', 'primary_domain', 'backup_domain', 'entry_ip', 'github_mirror', 'cf_api_token',
     'warp_license', 'argo_token', 'argo_domain']
 
   stringFields.forEach((field) => {
@@ -56,6 +56,10 @@ export async function onRequestPatch({ request, env, params }) {
   if (body.tags !== undefined) {
     node.tags = Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : []
   }
+
+  // Ensure legacy fields are removed from stored node records.
+  delete node.entry_cdn
+  delete node.entry_direct
 
   const nowIso = new Date().toISOString()
   node.updated_at = nowIso

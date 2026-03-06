@@ -27,7 +27,7 @@ function firstHost(candidates) {
 
 function resolveServerDomain(node) {
   const argoHost = firstHost([node?.argo_domain, node?.argo_temp_domain])
-  const publicHost = firstHost([node?.entry_cdn, node?.entry_direct])
+  const publicHost = firstHost([node?.primary_domain, node?.backup_domain])
   if (node?.install_argo === true) return argoHost || publicHost || ''
   return publicHost || argoHost || ''
 }

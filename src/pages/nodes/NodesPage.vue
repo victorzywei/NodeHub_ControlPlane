@@ -40,8 +40,8 @@ const form = reactive({
   region: '',
   tags: '',
   install_cert: true,
-  entry_cdn: '',
-  entry_direct: '',
+  primary_domain: '',
+  backup_domain: '',
   entry_ip: '',
   github_mirror: '',
   cf_api_token: '',
@@ -127,8 +127,8 @@ function toPayload(): Partial<NodeRecord> {
       .map((item: string) => item.trim())
       .filter(Boolean),
     install_cert: enableCertInstall,
-    entry_cdn: form.entry_cdn.trim(),
-    entry_direct: form.entry_direct.trim(),
+    primary_domain: form.primary_domain.trim(),
+    backup_domain: form.backup_domain.trim(),
     entry_ip: form.entry_ip.trim(),
     github_mirror: form.github_mirror.trim(),
     cf_api_token: form.cf_api_token.trim(),
@@ -154,8 +154,8 @@ function fillForm(node?: NodeRecord): void {
   form.region = node?.region || ''
   form.tags = (node?.tags || []).join(', ')
   form.install_cert = node?.install_cert ?? true
-  form.entry_cdn = node?.entry_cdn || ''
-  form.entry_direct = node?.entry_direct || ''
+  form.primary_domain = node?.primary_domain || ''
+  form.backup_domain = node?.backup_domain || ''
   form.entry_ip = node?.entry_ip || ''
   form.github_mirror = node?.github_mirror || ''
   form.cf_api_token = node?.cf_api_token || ''
@@ -361,10 +361,10 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   const heartbeatUrl = quoteShell(`${baseUrl}/agent/heartbeat?node_id=${encodeURIComponent(node.id)}`)
   const reconcileUrl = quoteShell(`${baseUrl}/agent/reconcile?node_id=${encodeURIComponent(node.id)}&current_version=${Number.isFinite(node.current_version) ? node.current_version : 0}`)
   const tokenHeader = quoteShell(`X-Node-Token: ${node.token || ''}`)
-  const entryCdn = quoteShell(node.entry_cdn || '')
-  const entryDirect = quoteShell(node.entry_direct || '')
-  const entryResolve = node.entry_cdn && node.entry_ip ? quoteShell(`${node.entry_cdn}:443:${node.entry_ip}`) : ''
-  const entryHttpsUrl = node.entry_cdn ? quoteShell(`https://${node.entry_cdn}`) : ''
+  const primaryDomain = quoteShell(node.primary_domain || '')
+  const backupDomain = quoteShell(node.backup_domain || '')
+  const entryResolve = node.primary_domain && node.entry_ip ? quoteShell(`${node.primary_domain}:443:${node.entry_ip}`) : ''
+  const entryHttpsUrl = node.primary_domain ? quoteShell(`https://${node.primary_domain}`) : ''
 
   commands.push({
     title: '管理端接口检查命令集合',
@@ -439,9 +439,9 @@ function buildVpsTroubleshootCommands(node: NodeRecord, baseUrl: string): Array<
   })
 
   const entryCommands = [
-    node.entry_cdn ? `nslookup ${entryCdn}` : '',
-    node.entry_direct ? `nslookup ${entryDirect}` : '',
-    node.entry_cdn && node.entry_ip ? `curl -kI --connect-timeout 8 --resolve ${entryResolve} ${entryHttpsUrl}` : '',
+    node.primary_domain ? `nslookup ${primaryDomain}` : '',
+    node.backup_domain ? `nslookup ${backupDomain}` : '',
+    node.primary_domain && node.entry_ip ? `curl -kI --connect-timeout 8 --resolve ${entryResolve} ${entryHttpsUrl}` : '',
   ].filter((item) => item.length > 0)
   if (entryCommands.length > 0) {
     commands.push({
@@ -812,8 +812,8 @@ onMounted(loadNodesData)
       <div>WARP License：{{ detailNode.warp_license || '-' }}</div>
       <template v-if="detailInstallGroup(detailNode) === 'public_ip'">
         <div>证书安装：{{ detailNode.install_cert ? '已启用' : '未启用' }}</div>
-        <div>入口 CDN：{{ detailNode.entry_cdn || '-' }}</div>
-        <div>入口 Direct：{{ detailNode.entry_direct || '-' }}</div>
+        <div>主域名：{{ detailNode.primary_domain || '-' }}</div>
+        <div>备域名：{{ detailNode.backup_domain || '-' }}</div>
         <div>入口 IP：{{ detailNode.entry_ip || '-' }}</div>
         <div>Cloudflare Token：{{ detailNode.cf_api_token || '-' }}</div>
       </template>
@@ -887,16 +887,16 @@ onMounted(loadNodesData)
         </select>
       </label>
       <div class="muted" style="font-size: 12px; margin-top: 6px">
-        有公网 IP：入口域名 + 入口 IP + 证书安装；无公网 IP：Argo 隧道；none：跳过重复安装。
+        有公网 IP：主域名 + 备域名 + 入口 IP + 证书安装；无公网 IP：Argo 隧道；none：跳过重复安装。
       </div>
       <template v-if="installGroup === 'public_ip'">
         <label>
-          入口 CDN 域名
-          <input v-model="form.entry_cdn" class="input" />
+          主域名
+          <input v-model="form.primary_domain" class="input" />
         </label>
         <label>
-          入口 Direct 域名
-          <input v-model="form.entry_direct" class="input" />
+          备域名
+          <input v-model="form.backup_domain" class="input" />
         </label>
         <label>
           入口 IP

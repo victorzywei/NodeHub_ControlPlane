@@ -66,7 +66,8 @@ function firstHost(candidates) {
 function resolveSubscriptionAddress(node) {
   // no_public_ip mode should prefer Argo domain
   const argoHost = firstHost([node?.argo_domain, node?.argo_temp_domain])
-  const publicHost = firstHost([node?.entry_direct, node?.entry_cdn, node?.entry_ip])
+  // public_ip mode should always prefer primary domain, then fallback to backup domain/IP.
+  const publicHost = firstHost([node?.primary_domain, node?.backup_domain, node?.entry_ip])
 
   if (node?.install_argo === true) {
     return argoHost || publicHost || 'unknown'

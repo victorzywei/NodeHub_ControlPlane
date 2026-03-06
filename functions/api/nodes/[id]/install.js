@@ -38,11 +38,11 @@ export async function onRequestGet({ request, env, params }) {
   const installArgo = node.install_argo === true
   const argoPort = toPort(node.argo_port, 2053)
 
-  if (installCert && node.entry_cdn) {
-    commandParts.push(` --tls-domain ${quoteShell(node.entry_cdn)}`)
+  if (installCert && node.primary_domain) {
+    commandParts.push(` --tls-domain ${quoteShell(node.primary_domain)}`)
   }
-  if (installCert && node.entry_direct) {
-    commandParts.push(` --tls-domain-alt ${quoteShell(node.entry_direct)}`)
+  if (installCert && node.backup_domain) {
+    commandParts.push(` --tls-domain-alt ${quoteShell(node.backup_domain)}`)
   }
   if (node.github_mirror) {
     commandParts.push(` --github-mirror ${quoteShell(node.github_mirror)}`)

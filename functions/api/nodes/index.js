@@ -31,6 +31,8 @@ export async function onRequestPost({ request, env }) {
   const body = await request.json().catch(() => ({}))
   const name = String(body.name || '').trim()
   const nodeType = String(body.node_type || '').trim()
+  const primaryDomain = String(body.primary_domain || '')
+  const backupDomain = String(body.backup_domain || '')
   const warpLicense = String(body.warp_license || '')
   const argoToken = String(body.argo_token || '')
   const argoDomain = String(body.argo_domain || '')
@@ -53,8 +55,8 @@ export async function onRequestPost({ request, env }) {
     region: String(body.region || ''),
     tags: Array.isArray(body.tags) ? body.tags.map((item) => String(item)) : [],
     install_cert: installCert,
-    entry_cdn: String(body.entry_cdn || ''),
-    entry_direct: String(body.entry_direct || ''),
+    primary_domain: primaryDomain,
+    backup_domain: backupDomain,
     entry_ip: String(body.entry_ip || ''),
     github_mirror: String(body.github_mirror || ''),
     cf_api_token: String(body.cf_api_token || ''),
