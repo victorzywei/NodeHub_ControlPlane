@@ -31,6 +31,7 @@ export async function onRequestGet({ request, env, params }) {
     ` --node-id ${quoteShell(node.id)}`,
     ` --node-token ${quoteShell(node.token)}`,
     ` --heartbeat-interval ${quoteShell('600')}`,
+    ` --reconcile-interval ${quoteShell('15')}`,
   ]
   const installWarp = node.install_warp === true
   const installCert = node.install_cert !== undefined ? node.install_cert === true : true
