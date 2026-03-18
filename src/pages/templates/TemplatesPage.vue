@@ -102,6 +102,12 @@ const filteredTemplates = computed(() => {
 const builtinRows = computed(() => filteredTemplates.value.filter((item) => item.kind === 'builtin'))
 const customRows = computed(() => filteredTemplates.value.filter((item) => item.kind === 'custom'))
 
+function formatTemplatePort(template: TemplateRecord): string {
+  const raw = template.defaults?.port
+  const port = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? String(port) : '-'
+}
+
 const presetParamFields = computed<EditorParamField[]>(() => {
   return getPresetTemplateParamFields(form.protocol, form.transport, form.tls_mode, form.engine)
 })
@@ -563,6 +569,7 @@ onMounted(loadData)
         <th>引擎</th>
         <th>协议</th>
         <th>传输</th>
+        <th>端口</th>
         <th>TLS</th>
         <th>可用节点</th>
         <th>说明</th>
@@ -575,13 +582,14 @@ onMounted(loadData)
         <td>{{ item.engine }}</td>
         <td>{{ item.protocol }}</td>
         <td>{{ item.transport }}</td>
+        <td>{{ formatTemplatePort(item) }}</td>
         <td>{{ item.tls_mode }}</td>
         <td>{{ item.node_types.join(', ') || '-' }}</td>
         <td class="muted">{{ item.description || '-' }}</td>
         <td><button class="btn btn-secondary" @click="openEdit(item)">编辑参数</button></td>
       </tr>
       <tr v-if="!loading && builtinRows.length === 0">
-        <td colspan="8" class="muted">暂无内置模板</td>
+        <td colspan="9" class="muted">暂无内置模板</td>
       </tr>
     </tbody>
   </DataGrid>
@@ -593,6 +601,7 @@ onMounted(loadData)
         <th>引擎</th>
         <th>协议</th>
         <th>传输</th>
+        <th>端口</th>
         <th>TLS</th>
         <th>可用节点</th>
         <th>操作</th>
@@ -604,12 +613,13 @@ onMounted(loadData)
         <td>{{ item.engine }}</td>
         <td>{{ item.protocol }}</td>
         <td>{{ item.transport }}</td>
+        <td>{{ formatTemplatePort(item) }}</td>
         <td>{{ item.tls_mode }}</td>
         <td>{{ item.node_types.join(', ') || '-' }}</td>
         <td><button class="btn btn-secondary" @click="openEdit(item)">编辑</button></td>
       </tr>
       <tr v-if="!loading && customRows.length === 0">
-        <td colspan="7" class="muted">暂无自定义模板</td>
+        <td colspan="8" class="muted">暂无自定义模板</td>
       </tr>
     </tbody>
   </DataGrid>
