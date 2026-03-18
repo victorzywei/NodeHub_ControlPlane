@@ -1,5 +1,5 @@
 ﻿import { requireAdmin } from '../../_lib/auth.js'
-import { KEY, createToken, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'
+import { KEY, createToken, kvPutJson, listJsonByPrefix } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
 export async function onRequestGet({ request, env }) {
@@ -7,7 +7,7 @@ export async function onRequestGet({ request, env }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const rows = await hydrateByIndex(kv, KEY.idxSubscriptions, KEY.subscription)
+  const rows = await listJsonByPrefix(kv, 'subscription:')
   rows.sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime())
   return ok(rows)
 }
@@ -34,6 +34,5 @@ export async function onRequestPost({ request, env }) {
   if (!sub.name) return fail('VALIDATION', 'name is required', 400)
 
   await kvPutJson(kv, KEY.subscription(token), sub)
-  await indexUpsert(kv, KEY.idxSubscriptions, { id: token, name: sub.name, updated_at: now })
   return ok(sub, { status: 201 })
 }

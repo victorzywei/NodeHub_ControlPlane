@@ -592,13 +592,13 @@ function parseHostPort(value, fallbackHost, fallbackPort) {
 function normalizeReserved(value, fallback) {
   if (Array.isArray(value) && value.length === 3) {
     const reserved = value.map((item) => Number(item))
-    if (reserved.every((item) => Number.isFinite(item))) return reserved
+    if (reserved.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) return reserved
   }
 
   const raw = text(value)
   if (raw) {
     const reserved = raw.split(',').map((item) => Number(item.trim()))
-    if (reserved.length === 3 && reserved.every((item) => Number.isFinite(item))) return reserved
+    if (reserved.length === 3 && reserved.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) return reserved
   }
 
   return fallback
@@ -609,6 +609,13 @@ function resolveWarpRouteCidrs(value) {
   if (mode === 'ipv4') return ['0.0.0.0/0']
   if (mode === 'ipv6') return ['::/0']
   return ['0.0.0.0/0', '::/0']
+}
+
+function resolveXrayWarpDomainStrategy(value) {
+  const mode = text(value).toLowerCase()
+  if (mode === 'ipv4') return 'ForceIPv4'
+  if (mode === 'ipv6') return 'ForceIPv6'
+  return 'ForceIP'
 }
 
 function isIpv4Address(value) {
@@ -631,12 +638,12 @@ function buildWarpEndpointBypassRule(server) {
   const host = text(server)
   if (!host) return null
   if (isIpv4Address(host)) {
-    return { ip_cidr: [`${host}/32`], outbound: 'direct' }
+    return { action: 'route', ip_cidr: [`${host}/32`], outbound: 'direct' }
   }
   if (isIpv6Address(host)) {
-    return { ip_cidr: [`${host}/128`], outbound: 'direct' }
+    return { action: 'route', ip_cidr: [`${host}/128`], outbound: 'direct' }
   }
-  return { domain: [host], outbound: 'direct' }
+  return { action: 'route', domain: [host], outbound: 'direct' }
 }
 
 function inboundTagSuffix(protocol) {
@@ -667,7 +674,8 @@ function resolveWarpRoute(templates, node) {
   if (!primaryTemplate) return null
   const settings = getEffectiveTemplateSettings(primaryTemplate, {}, node)
 
-  const ipCidrs = resolveWarpRouteCidrs(primaryTemplate.warp_route_mode || primaryTemplate.defaults?.warp_route_mode || 'all')
+  const routeMode = text(primaryTemplate.warp_route_mode || primaryTemplate.defaults?.warp_route_mode || 'all').toLowerCase() || 'all'
+  const ipCidrs = resolveWarpRouteCidrs(routeMode)
 
   const fallbackReserved = Array.isArray(node?.warp_reserved) && node.warp_reserved.length === 3
     ? node.warp_reserved.map(Number)
@@ -683,8 +691,7 @@ function resolveWarpRoute(templates, node) {
   )
   const localAddress = [localAddressV4, localAddressV6].filter(Boolean)
 
-  const privateKey = text(settings.warp_private_key || settings.private_key || node?.warp_private_key)
-  if (!privateKey) return null
+  const privateKey = requireField('warp_private_key', settings.warp_private_key || settings.private_key || node?.warp_private_key)
 
   const server = text(settings.warp_server || settings.server || endpointFallback.host || DEFAULT_WARP_SERVER)
   const serverPort = toPortNumber(settings.warp_server_port || settings.server_port, endpointFallback.port)
@@ -695,6 +702,7 @@ function resolveWarpRoute(templates, node) {
 
   return {
     ipCidrs,
+    routeMode,
     server,
     serverPort,
     localAddress,
@@ -723,13 +731,13 @@ function buildSingboxConfig(templates, params, node) {
     ]
     if (inboundTags.warpTags.length > 0) {
       // Route only WARP-enabled template inbounds through WARP.
-      rules.push({ inbound: inboundTags.warpTags, ip_cidr: warp.ipCidrs, outbound: 'warp-ep' })
+      rules.push({ action: 'route', inbound: inboundTags.warpTags, ip_cidr: warp.ipCidrs, outbound: 'warp-ep' })
     } else {
-      rules.push({ ip_cidr: warp.ipCidrs, outbound: 'warp-ep' })
+      rules.push({ action: 'route', ip_cidr: warp.ipCidrs, outbound: 'warp-ep' })
     }
     if (inboundTags.directTags.length > 0) {
       // Force non-WARP templates to direct, independent of global IP rules.
-      rules.push({ inbound: inboundTags.directTags, outbound: 'direct' })
+      rules.push({ action: 'route', inbound: inboundTags.directTags, outbound: 'direct' })
     }
 
     endpoints.push({
@@ -951,17 +959,13 @@ function buildXrayConfig(templates, params, node) {
           publicKey: warp.peerPublicKey,
           allowedIPs: ['0.0.0.0/0', '::/0'],
           endpoint: warpEndpoint,
+          keepAlive: 30,
         }],
         reserved: warp.reserved,
         mtu: warp.mtu,
-        kernelMode: warp.systemInterface,
+        noKernelTun: !warp.systemInterface,
+        domainStrategy: resolveXrayWarpDomainStrategy(warp.routeMode),
       },
-    })
-    outbounds.push({
-      tag: 'warp-out',
-      protocol: 'freedom',
-      settings: { domainStrategy: 'ForceIPv6v4' },
-      proxySettings: { tag: 'x-warp-out' },
     })
     routing.domainStrategy = 'IPOnDemand'
     routing.rules = []
@@ -971,10 +975,10 @@ function buildXrayConfig(templates, params, node) {
         inboundTag: inboundTags.warpTags,
         ip: warp.ipCidrs,
         network: 'tcp,udp',
-        outboundTag: 'warp-out',
+        outboundTag: 'x-warp-out',
       })
     } else {
-      routing.rules.push({ type: 'field', ip: warp.ipCidrs, network: 'tcp,udp', outboundTag: 'warp-out' })
+      routing.rules.push({ type: 'field', ip: warp.ipCidrs, network: 'tcp,udp', outboundTag: 'x-warp-out' })
     }
     if (inboundTags.directTags.length > 0) {
       routing.rules.push({ type: 'field', inboundTag: inboundTags.directTags, outboundTag: 'direct' })

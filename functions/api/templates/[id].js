@@ -9,7 +9,7 @@ import {
   getMergedBuiltinTemplate,
   toDefaults,
 } from '../../_lib/template-records.js'
-import { KEY, indexRemove, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
+import { KEY, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
 function resolvePatchEngine(value, fallback) {
@@ -156,6 +156,5 @@ export async function onRequestDelete({ request, env, params }) {
   }
 
   await kvDelete(kv, KEY.template(params.id))
-  await indexRemove(kv, KEY.idxTemplates, params.id)
   return ok({ deleted: params.id })
 }

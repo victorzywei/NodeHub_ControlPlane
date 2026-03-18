@@ -1,4 +1,4 @@
-import { KEY, kvGetJson, kvPutJson } from '../_lib/kv.js'
+import { loadNodeRecord, saveNodeRuntime } from '../_lib/node-store.js'
 import { ok, fail } from '../_lib/response.js'
 
 function toText(value, maxLength = 512) {
@@ -24,7 +24,7 @@ function toIntegerMetric(value, { min = 0, max = null } = {}) {
 }
 
 async function loadAndAuthNode(kv, nodeId, token) {
-  const node = await kvGetJson(kv, KEY.node(nodeId), null)
+  const node = await loadNodeRecord(kv, nodeId)
   if (!node) return { ok: false, response: fail('NOT_FOUND', 'Node not found', 404) }
   if (node.token !== token) return { ok: false, response: fail('UNAUTHORIZED', 'Invalid node token', 401) }
   return { ok: true, node }
@@ -74,7 +74,7 @@ async function applyHeartbeat(node, report, kv) {
     }
   }
 
-  await kvPutJson(kv, KEY.node(node.id), node)
+  await saveNodeRuntime(kv, node)
 
   return ok({
     node_id: node.id,

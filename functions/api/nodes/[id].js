@@ -1,6 +1,7 @@
 import { requireAdmin } from '../../_lib/auth.js'
-import { KEY, indexRemove, indexUpsert, kvDelete, kvGetJson, kvPutJson, readIndex } from '../../_lib/kv.js'
+import { KEY, kvDelete, listKeysByPrefix } from '../../_lib/kv.js'
 import { normalizeNode } from '../../_lib/node.js'
+import { deleteNodeRecord, loadNodeRecord, saveNodeCfg } from '../../_lib/node-store.js'
 import { ok, fail } from '../../_lib/response.js'
 
 function toPort(value, fallback = 2053) {
@@ -14,7 +15,7 @@ export async function onRequestGet({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id))
+  const node = await loadNodeRecord(kv, params.id)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   return ok(normalizeNode(node))
 }
@@ -24,7 +25,7 @@ export async function onRequestPatch({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id))
+  const node = await loadNodeRecord(kv, params.id)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))
@@ -63,8 +64,7 @@ export async function onRequestPatch({ request, env, params }) {
 
   const nowIso = new Date().toISOString()
   node.updated_at = nowIso
-  await kvPutJson(kv, KEY.node(node.id), node)
-  await indexUpsert(kv, KEY.idxNodes, { id: node.id, name: node.name, updated_at: node.updated_at })
+  await saveNodeCfg(kv, node)
 
   return ok(normalizeNode(node))
 }
@@ -74,13 +74,10 @@ export async function onRequestDelete({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const releaseIndex = await readIndex(kv, KEY.idxNodeReleases(params.id))
-  for (const row of releaseIndex) {
-    const rev = Number(row?.rev || row?.id || 0) || 0
-    if (rev > 0) await kvDelete(kv, KEY.release(params.id, rev))
-  }
-  await kvDelete(kv, KEY.idxNodeReleases(params.id))
-  await kvDelete(kv, KEY.node(params.id))
-  await indexRemove(kv, KEY.idxNodes, params.id)
+  const releaseKeys = await listKeysByPrefix(kv, `release:${params.id}:r`)
+  await Promise.all([
+    ...releaseKeys.map((key) => kvDelete(kv, key)),
+    deleteNodeRecord(kv, params.id),
+  ])
   return ok({ deleted: params.id })
 }

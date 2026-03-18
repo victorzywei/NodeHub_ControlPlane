@@ -1,4 +1,5 @@
 import { KEY, kvGetJson } from '../_lib/kv.js'
+import { loadNodeRecord } from '../_lib/node-store.js'
 import { ok, fail } from '../_lib/response.js'
 
 function text(value) {
@@ -20,7 +21,7 @@ export async function onRequestGet({ request, env }) {
   if (!token) return fail('UNAUTHORIZED', 'X-Node-Token is required', 401)
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(nodeId), null)
+  const node = await loadNodeRecord(kv, nodeId)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.token !== token) return fail('UNAUTHORIZED', 'Invalid node token', 401)
 

@@ -9,7 +9,7 @@ import {
   normalizeCustomTemplate,
   toDefaults,
 } from '../../_lib/template-records.js'
-import { KEY, createId, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'
+import { KEY, createId, kvPutJson, listJsonByPrefix } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
 export async function onRequestGet({ request, env }) {
@@ -18,7 +18,7 @@ export async function onRequestGet({ request, env }) {
 
   const kv = env.NODEHUB_KV
   const builtinRows = await listBuiltinTemplates(kv)
-  const customRows = (await hydrateByIndex(kv, KEY.idxTemplates, KEY.template)).map(normalizeCustomTemplate)
+  const customRows = (await listJsonByPrefix(kv, 'template:')).map(normalizeCustomTemplate)
 
   const all = [...builtinRows, ...customRows]
   all.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind.localeCompare(b.kind)))
@@ -86,6 +86,5 @@ export async function onRequestPost({ request, env }) {
   }
 
   await kvPutJson(kv, KEY.template(id), template)
-  await indexUpsert(kv, KEY.idxTemplates, { id, name: template.name, updated_at: now })
   return ok(template, { status: 201 })
 }

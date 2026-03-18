@@ -1,4 +1,5 @@
-import { KEY, kvGetJson, kvPutJson } from '../_lib/kv.js'
+import { KEY, kvGetJson } from '../_lib/kv.js'
+import { loadNodeRecord, saveNodeCurrent, saveNodeDesired } from '../_lib/node-store.js'
 import { canAdvanceStatus, getRelease, putRelease } from '../_lib/release.js'
 import { ok, fail } from '../_lib/response.js'
 
@@ -138,7 +139,7 @@ export async function onRequestPost({ request, env }) {
   if (rawEvents.length === 0) return fail('VALIDATION', 'events must be a non-empty array', 400)
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(nodeId), null)
+  const node = await loadNodeRecord(kv, nodeId)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.token !== token) return fail('UNAUTHORIZED', 'Invalid node token', 401)
 
@@ -148,6 +149,7 @@ export async function onRequestPost({ request, env }) {
 
   let accepted = 0
   let rejected = 0
+  let currentTouched = false
   const nowIso = new Date().toISOString()
   const desired = resolveDesired(node)
 
@@ -201,7 +203,7 @@ export async function onRequestPost({ request, env }) {
     await putRelease(kv, nextRelease)
 
     if (event.status === 'healthy') {
-      setNodeCurrentFromDesired(node, desired, desiredArtifact, nowIso)
+      currentTouched = setNodeCurrentFromDesired(node, desired, desiredArtifact, nowIso) || currentTouched
     }
 
     node.last_release_status = event.status
@@ -213,7 +215,10 @@ export async function onRequestPost({ request, env }) {
   }
 
   if (accepted > 0) {
-    await kvPutJson(kv, KEY.node(node.id), node)
+    await saveNodeDesired(kv, node)
+    if (currentTouched) {
+      await saveNodeCurrent(kv, node)
+    }
   }
 
   return ok({

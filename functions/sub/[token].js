@@ -1,4 +1,5 @@
-import { KEY, kvGetJson, hydrateByIndex } from '../_lib/kv.js'
+import { KEY, kvGetJson } from '../_lib/kv.js'
+import { listNodeRecords } from '../_lib/node-store.js'
 import { renderV2ray, renderClash, renderSingbox } from '../_lib/sub-renderer.js'
 
 function text(content, status = 200, extraHeaders = {}) {
@@ -83,13 +84,13 @@ export async function onRequestGet({ request, env, params }) {
   const sub = await kvGetJson(kv, KEY.subscription(params.token), null)
   if (!sub || !sub.enabled) return text('# subscription disabled or not found', 404)
 
-  const nodes = await hydrateByIndex(kv, KEY.idxNodes, KEY.node)
+  const nodes = await listNodeRecords(kv)
   const visibleSet = new Set(sub.visible_node_ids || [])
   const filtered = nodes.filter((node) => visibleSet.size === 0 || visibleSet.has(node.id))
 
   const outbounds = []
   for (const node of filtered) {
-    const artifactId = String(node.desired_artifact_id || '').trim()
+    const artifactId = String(node.current_artifact?.id || '').trim()
     const artifact = artifactId ? await kvGetJson(kv, KEY.artifact(artifactId), null) : null
 
     const releaseManifest =

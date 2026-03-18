@@ -1,7 +1,7 @@
 import { requireAdmin } from '../../../_lib/auth.js'
 import { normalizeNodeTemplateIds, queueNodeTemplateApply } from '../../../_lib/node-apply.js'
-import { KEY, indexUpsert, kvGetJson, kvPutJson } from '../../../_lib/kv.js'
 import { normalizeNode } from '../../../_lib/node.js'
+import { loadNodeRecord, saveNodeDesired } from '../../../_lib/node-store.js'
 import { ok, fail } from '../../../_lib/response.js'
 
 export async function onRequestPost({ request, env, params }) {
@@ -9,7 +9,7 @@ export async function onRequestPost({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id))
+  const node = await loadNodeRecord(kv, params.id)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))
@@ -34,8 +34,7 @@ export async function onRequestPost({ request, env, params }) {
   }
 
   node.updated_at = nowIso
-  await kvPutJson(kv, KEY.node(node.id), node)
-  await indexUpsert(kv, KEY.idxNodes, { id: node.id, name: node.name, updated_at: nowIso })
+  await saveNodeDesired(kv, node)
 
   return ok(normalizeNode(node))
 }

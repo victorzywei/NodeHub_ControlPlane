@@ -7,7 +7,7 @@ import {
   resolveTemplatesForPreview,
 } from '../../../_lib/node-apply.js'
 import { supportsTemplateCombination } from '../../../_lib/template-capability.js'
-import { KEY, kvGetJson } from '../../../_lib/kv.js'
+import { loadNodeRecord } from '../../../_lib/node-store.js'
 import { ok, fail } from '../../../_lib/response.js'
 
 function calcNextVersion(node) {
@@ -21,7 +21,7 @@ export async function onRequestPost({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id))
+  const node = await loadNodeRecord(kv, params.id)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const body = await request.json().catch(() => ({}))

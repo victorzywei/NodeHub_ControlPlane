@@ -1,30 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { formatRelative, parseJsonObject } from '@/utils/format'
 import { getPresetTemplateParamFields } from '@/utils/templateParams'
-import { buildNodeArtifactBundle } from '../../functions/_lib/artifact.js'
+import { buildNodeArtifactBundle, buildNodeConfigPreview } from '../../functions/_lib/artifact.js'
 import { renderV2ray } from '../../functions/_lib/sub-renderer.js'
-
-function decodeBase64Utf8(value: string): string {
-  const binary = atob(value)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-  return new TextDecoder().decode(bytes)
-}
-
-function parseBundleFiles(bundleText: string): Record<string, string> {
-  const files: Record<string, string> = {}
-  const lines = String(bundleText || '').split(/\r?\n/)
-  for (const line of lines) {
-    if (!line.startsWith('file=')) continue
-    const entry = line.slice(5)
-    const sep = entry.indexOf('|')
-    if (sep <= 0) continue
-    const path = entry.slice(0, sep)
-    const encoded = entry.slice(sep + 1)
-    files[path] = decodeBase64Utf8(encoded)
-  }
-  return files
-}
 
 describe('format utilities', () => {
   it('parses JSON object', () => {
@@ -73,8 +51,7 @@ describe('format utilities', () => {
     expect(outbound.template_name).toBe('VLESS + WS + TLS')
     expect(uuid).toMatch(/^[0-9a-f-]{36}$/i)
 
-    const files = parseBundleFiles(artifact.bundle)
-    const config = JSON.parse(files['sing-box.json']) as {
+    const config = JSON.parse(String(artifact.files['sing-box.json'] || 'null')) as {
       inbounds?: Array<{
         users?: Array<{
           uuid?: string
@@ -133,8 +110,7 @@ describe('format utilities', () => {
       engine: 'sing-box',
     })
 
-    const files = parseBundleFiles(artifact.bundle)
-    const config = JSON.parse(files['sing-box.json']) as {
+    const config = JSON.parse(String(artifact.files['sing-box.json'] || 'null')) as {
       inbounds?: Array<{
         tls?: {
           reality?: {
@@ -180,8 +156,7 @@ describe('format utilities', () => {
       engine: 'sing-box',
     })
 
-    const files = parseBundleFiles(artifact.bundle)
-    const config = JSON.parse(files['sing-box.json']) as {
+    const config = JSON.parse(String(artifact.files['sing-box.json'] || 'null')) as {
       inbounds?: Array<{
         transport?: {
           type?: string
@@ -234,8 +209,7 @@ describe('format utilities', () => {
       engine: 'xray',
     })
 
-    const files = parseBundleFiles(artifact.bundle)
-    const config = JSON.parse(files['xray.json']) as {
+    const config = JSON.parse(String(artifact.files['xray.json'] || 'null')) as {
       inbounds?: Array<{
         streamSettings?: {
           realitySettings?: {
@@ -248,5 +222,122 @@ describe('format utilities', () => {
 
     expect(config.inbounds?.[0]?.streamSettings?.realitySettings?.serverNames?.[0]).toBe('gateway.icloud.com')
     expect(config.inbounds?.[0]?.streamSettings?.realitySettings?.dest).toBe('gateway.icloud.com:443')
+  })
+
+  it('renders latest official WARP fields for sing-box and xray', () => {
+    const warpNode = {
+      id: 'node-warp',
+      warp_private_key: '6CRVRLgFwGajnikoVOPTDNZnDhx3EydhPsMgpxHfBCY=',
+      warp_v6: '2606:4700:110:857a:6a95:fe27:1870:2a9d',
+      warp_reserved: [240, 25, 146],
+      warp_endpoint: 'engage.cloudflareclient.com:2408',
+    }
+    const defaults = {
+      port: 443,
+      uuid: '11111111-1111-4111-8111-111111111111',
+      warp_private_key: '6CRVRLgFwGajnikoVOPTDNZnDhx3EydhPsMgpxHfBCY=',
+      warp_local_address_ipv4: '172.16.0.2/32',
+      warp_local_address_ipv6: '2606:4700:110:857a:6a95:fe27:1870:2a9d/128',
+      warp_peer_public_key: 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
+      warp_server: 'engage.cloudflareclient.com',
+      warp_server_port: 2408,
+      warp_system_interface: 'false',
+      warp_mtu: 1280,
+      warp_reserved: '240,25,146',
+    }
+
+    const singBoxPreview = buildNodeConfigPreview({
+      node: warpNode,
+      params: {},
+      engine: 'sing-box',
+      templates: [{
+        id: 'tpl-warp-sing-box',
+        name: 'WARP sing-box',
+        engine: 'sing-box',
+        protocol: 'vless',
+        transport: 'tcp',
+        tls_mode: 'none',
+        defaults,
+        warp_exit: true,
+        warp_route_mode: 'all',
+      }],
+    })
+    const singBoxConfig = JSON.parse(singBoxPreview.config_text) as {
+      route?: {
+        rules?: Array<{
+          action?: string
+          outbound?: string
+        }>
+      }
+    }
+
+    expect(singBoxConfig.route?.rules?.[2]?.action).toBe('route')
+    expect(singBoxConfig.route?.rules?.[2]?.outbound).toBe('direct')
+    expect(singBoxConfig.route?.rules?.[3]?.action).toBe('route')
+    expect(singBoxConfig.route?.rules?.[3]?.outbound).toBe('warp-ep')
+
+    const xrayPreview = buildNodeConfigPreview({
+      node: warpNode,
+      params: {},
+      engine: 'xray',
+      templates: [{
+        id: 'tpl-warp-xray',
+        name: 'WARP xray',
+        engine: 'xray',
+        protocol: 'vless',
+        transport: 'tcp',
+        tls_mode: 'none',
+        defaults,
+        warp_exit: true,
+        warp_route_mode: 'all',
+      }],
+    })
+    const xrayConfig = JSON.parse(xrayPreview.config_text) as {
+      outbounds?: Array<{
+        tag?: string
+        settings?: {
+          noKernelTun?: boolean
+          kernelMode?: boolean
+          domainStrategy?: string
+          peers?: Array<{
+            keepAlive?: number
+          }>
+        }
+      }>
+      routing?: {
+        rules?: Array<{
+          outboundTag?: string
+        }>
+      }
+    }
+
+    const warpOutbound = xrayConfig.outbounds?.find((outbound) => outbound.tag === 'x-warp-out')
+    expect(warpOutbound?.settings?.noKernelTun).toBe(true)
+    expect(warpOutbound?.settings?.kernelMode).toBeUndefined()
+    expect(warpOutbound?.settings?.domainStrategy).toBe('ForceIP')
+    expect(warpOutbound?.settings?.peers?.[0]?.keepAlive).toBe(30)
+    expect(xrayConfig.routing?.rules?.[0]?.outboundTag).toBe('x-warp-out')
+  })
+
+  it('fails preview when WARP private key is missing', () => {
+    expect(() => buildNodeConfigPreview({
+      node: { id: 'node-missing-warp' },
+      params: {},
+      engine: 'xray',
+      templates: [{
+        id: 'tpl-warp-missing-key',
+        name: 'WARP missing key',
+        engine: 'xray',
+        protocol: 'vless',
+        transport: 'tcp',
+        tls_mode: 'none',
+        defaults: {
+          port: 443,
+          uuid: '11111111-1111-4111-8111-111111111111',
+        },
+        warp_exit: true,
+        warp_route_mode: 'all',
+      }],
+    })).toThrow('missing required field: warp_private_key')
   })
 })

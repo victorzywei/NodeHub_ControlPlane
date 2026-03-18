@@ -1,5 +1,6 @@
 import { requireAdmin } from '../../../_lib/auth.js'
 import { KEY, kvGetJson } from '../../../_lib/kv.js'
+import { loadNodeRecord } from '../../../_lib/node-store.js'
 import { ok, fail } from '../../../_lib/response.js'
 
 function parseManifestEnv(text) {
@@ -130,7 +131,7 @@ export async function onRequestGet({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id), null)
+  const node = await loadNodeRecord(kv, params.id)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
 
   const desiredRev = Number(node.desired_rev || 0) || 0

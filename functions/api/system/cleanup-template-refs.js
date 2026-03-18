@@ -1,6 +1,6 @@
 import { requireAdmin } from '../../_lib/auth.js'
-import { KEY, indexUpsert, kvGetJson, kvPutJson, readIndex } from '../../_lib/kv.js'
 import { normalizeNodeTemplateIds, normalizeTemplateNodeTypes, resolveTemplateForApply } from '../../_lib/node-apply.js'
+import { listNodeRecords, saveNodeDesired } from '../../_lib/node-store.js'
 import { supportsTemplateCombination } from '../../_lib/template-capability.js'
 import { ok, fail } from '../../_lib/response.js'
 
@@ -34,7 +34,7 @@ export async function onRequestPost({ request, env }) {
   const dryRun = toBoolean(body?.dry_run, true)
   const nowIso = new Date().toISOString()
 
-  const indexRows = await readIndex(kv, KEY.idxNodes)
+  const nodes = await listNodeRecords(kv)
   const details = []
 
   let processed = 0
@@ -42,11 +42,7 @@ export async function onRequestPost({ request, env }) {
   let removedRefs = 0
   let updated = 0
 
-  for (const row of indexRows) {
-    const nodeId = String(row?.id || '')
-    if (!nodeId) continue
-
-    const node = await kvGetJson(kv, KEY.node(nodeId), null)
+  for (const node of nodes) {
     if (!node || typeof node !== 'object') continue
     processed += 1
 
@@ -90,8 +86,7 @@ export async function onRequestPost({ request, env }) {
 
     node.applied_template_ids = keptIds
     node.updated_at = nowIso
-    await kvPutJson(kv, KEY.node(node.id), node)
-    await indexUpsert(kv, KEY.idxNodes, { id: node.id, name: node.name, updated_at: nowIso })
+    await saveNodeDesired(kv, node)
     updated += 1
   }
 

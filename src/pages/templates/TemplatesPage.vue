@@ -443,8 +443,8 @@ function validateWarpDefaults(defaults: Record<string, unknown>): string | null 
   }
   if (warpReserved) {
     const parts = warpReserved.split(',').map((item) => Number(item.trim()))
-    if (parts.length !== 3 || parts.some((item) => !Number.isFinite(item))) {
-      return 'WARP Reserved 格式应为 a,b,c（3 个数字）'
+    if (parts.length !== 3 || parts.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) {
+      return 'WARP Reserved 格式应为 a,b,c（3 个 0-255 整数）'
     }
   }
   return null

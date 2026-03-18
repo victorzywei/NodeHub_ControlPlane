@@ -1,4 +1,4 @@
-import { KEY, indexUpsert, kvGetJson, kvPutJson } from './kv.js'
+import { KEY, kvGetJson, kvPutJson } from './kv.js'
 
 const RELEASE_STATUS_SET = new Set(['pending', 'applied', 'healthy', 'failed'])
 
@@ -73,11 +73,5 @@ export async function putRelease(kv, record) {
   const next = normalizeReleaseRecord(record)
   if (!next.node_id || next.rev <= 0) return null
   await kvPutJson(kv, KEY.release(next.node_id, next.rev), next)
-  await indexUpsert(kv, KEY.idxNodeReleases(next.node_id), {
-    id: String(next.rev),
-    rev: next.rev,
-    status: next.status,
-    updated_at: next.updated_at,
-  })
   return next
 }

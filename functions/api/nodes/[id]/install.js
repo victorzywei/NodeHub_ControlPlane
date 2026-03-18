@@ -1,5 +1,5 @@
 ﻿import { requireAdmin } from '../../../_lib/auth.js'
-import { KEY, kvGetJson } from '../../../_lib/kv.js'
+import { loadNodeRecord } from '../../../_lib/node-store.js'
 import { ok, fail } from '../../../_lib/response.js'
 
 function quoteShell(value) {
@@ -17,7 +17,7 @@ export async function onRequestGet({ request, env, params }) {
   if (!auth.ok) return auth.response
 
   const kv = env.NODEHUB_KV
-  const node = await kvGetJson(kv, KEY.node(params.id))
+  const node = await loadNodeRecord(kv, params.id)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   if (node.node_type !== 'vps') {
     return fail('VALIDATION', 'Install command is only available for vps nodes', 400)

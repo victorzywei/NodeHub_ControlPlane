@@ -1,5 +1,5 @@
 ﻿import { requireAdmin } from '../../_lib/auth.js'
-import { KEY, indexRemove, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
+import { KEY, kvDelete, kvGetJson, kvPutJson } from '../../_lib/kv.js'
 import { ok, fail } from '../../_lib/response.js'
 
 export async function onRequestGet({ request, env, params }) {
@@ -37,6 +37,5 @@ export async function onRequestDelete({ request, env, params }) {
 
   const kv = env.NODEHUB_KV
   await kvDelete(kv, KEY.subscription(params.token))
-  await indexRemove(kv, KEY.idxSubscriptions, params.token)
   return ok({ deleted: params.token })
 }

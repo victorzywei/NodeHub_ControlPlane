@@ -1,9 +1,9 @@
 ﻿const KEY = {
-  idxNodes: 'idx:nodes',
-  idxTemplates: 'idx:templates',
-  idxSubscriptions: 'idx:subscriptions',
-  idxNodeReleases: (nodeId) => `idx:node_releases:${nodeId}`,
   node: (id) => `node:${id}`,
+  nodeCfg: (id) => `node_cfg:${id}`,
+  nodeRuntime: (id) => `node_runtime:${id}`,
+  nodeDesired: (id) => `node_desired:${id}`,
+  nodeCurrent: (id) => `node_current:${id}`,
   template: (id) => `template:${id}`,
   templateOverride: (id) => `template_override:${id}`,
   subscription: (token) => `subscription:${token}`,
@@ -35,29 +35,24 @@ export async function kvDelete(kv, key) {
   await kv.delete(key)
 }
 
-export async function readIndex(kv, key) {
-  return (await kvGetJson(kv, key, [])) || []
+export async function listKeysByPrefix(kv, prefix) {
+  const names = []
+  let cursor = undefined
+
+  do {
+    const page = await kv.list({ prefix, cursor })
+    for (const row of page.keys || []) {
+      const name = String(row?.name || '')
+      if (name) names.push(name)
+    }
+    cursor = page.list_complete ? undefined : page.cursor
+  } while (cursor)
+
+  return names
 }
 
-export async function writeIndex(kv, key, rows) {
-  await kvPutJson(kv, key, rows)
-}
-
-export async function indexUpsert(kv, key, row) {
-  const rows = await readIndex(kv, key)
-  const next = rows.filter((item) => item.id !== row.id)
-  next.push(row)
-  await writeIndex(kv, key, next)
-}
-
-export async function indexRemove(kv, key, id) {
-  const rows = await readIndex(kv, key)
-  const next = rows.filter((item) => item.id !== id)
-  await writeIndex(kv, key, next)
-}
-
-export async function hydrateByIndex(kv, indexKey, keyFactory) {
-  const indexRows = await readIndex(kv, indexKey)
-  const docs = await Promise.all(indexRows.map((row) => kvGetJson(kv, keyFactory(row.id))))
-  return docs.filter(Boolean)
+export async function listJsonByPrefix(kv, prefix) {
+  const keys = await listKeysByPrefix(kv, prefix)
+  const rows = await Promise.all(keys.map((key) => kvGetJson(kv, key, null)))
+  return rows.filter(Boolean)
 }

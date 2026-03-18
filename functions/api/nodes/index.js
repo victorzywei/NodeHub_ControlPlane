@@ -1,6 +1,7 @@
 import { requireAdmin } from '../../_lib/auth.js'
-import { KEY, createId, createToken, hydrateByIndex, indexUpsert, kvPutJson } from '../../_lib/kv.js'
+import { createId, createToken } from '../../_lib/kv.js'
 import { normalizeNode } from '../../_lib/node.js'
+import { createNodeRecord, listNodeRecords } from '../../_lib/node-store.js'
 import { ok, fail } from '../../_lib/response.js'
 
 function toPort(value, fallback = 2053) {
@@ -16,7 +17,7 @@ export async function onRequestGet({ request, env }) {
   const kv = env.NODEHUB_KV
   if (!kv) return fail('CONFIG_ERROR', 'NODEHUB_KV is missing', 500)
 
-  const nodes = await hydrateByIndex(kv, KEY.idxNodes, KEY.node)
+  const nodes = await listNodeRecords(kv)
   nodes.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
   return ok(nodes.map(normalizeNode))
 }
@@ -112,8 +113,7 @@ export async function onRequestPost({ request, env }) {
     updated_at: now,
   }
 
-  await kvPutJson(kv, KEY.node(id), node)
-  await indexUpsert(kv, KEY.idxNodes, { id, name: node.name, updated_at: now })
+  await createNodeRecord(kv, node)
 
   return ok(normalizeNode(node), { status: 201 })
 }

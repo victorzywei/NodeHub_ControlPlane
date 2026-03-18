@@ -1,5 +1,5 @@
 import { BUILTIN_TEMPLATES } from './constants.js'
-import { KEY, kvGetJson, kvPutJson } from './kv.js'
+import { KEY, kvGetJson } from './kv.js'
 import { normalizeTemplateEngine, normalizeTemplateNodeTypes } from './node-apply.js'
 import { applyTemplateAutoDefaults } from './template.js'
 
@@ -50,7 +50,6 @@ async function buildBuiltinRow(kv, base) {
       },
       updated_at: now,
     }
-    await kvPutJson(kv, KEY.templateOverride(base.id), effectiveOverride)
   }
 
   return {
